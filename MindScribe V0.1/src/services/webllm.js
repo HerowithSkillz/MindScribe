@@ -334,57 +334,225 @@ Remember: You are a supportive friend, not a replacement for professional therap
 
     await this.waitForProcessing();
     this.isProcessing = true;
-    this.addDebugLog('task', 'Starting journal analysis...');
+    this.addDebugLog('task', 'Starting comprehensive journal analysis (FR-007)...');
 
     try {
       const messages = [
         {
           role: 'system',
-          content: 'You are an empathetic AI analyzing journal entries for emotional insights.'
+          content: 'You are an expert psychological analyst. Analyze journal entries and provide structured emotional assessment in a specific format.'
         },
         {
           role: 'user',
-          content: `Analyze this journal entry and provide: 1) Main emotion (one word), 2) Sentiment score (0-10), 3) Stress level (low/medium/high), 4) Brief supportive insight (1-2 sentences).
+          content: `Analyze this journal entry and provide comprehensive emotional assessment.
 
-Journal: "${journalText}"
+Journal Entry:
+"${journalText}"
 
-Format: emotion|score|stress|insight`
+Provide a detailed analysis covering:
+- Primary mood/emotion (one word)
+- Sentiment score (0-10 scale)
+- Stress level assessment
+- Emotional tone description
+- Brief summary (10 words max)
+- Supportive insight
+
+Provide your complete analysis:`
         }
       ];
 
-      this.addDebugLog('info', 'Analyzing journal content...');
+      this.addDebugLog('info', 'Requesting AI analysis...');
       
       const completion = await this.engine.chat.completions.create({
         messages,
-        temperature: 0.5,
-        max_tokens: 150,
+        temperature: 0.4,
+        max_tokens: 300,
       });
 
-      const response = completion.choices[0].message.content;
-      const parts = response.split('|').map(p => p.trim());
+      const response = completion.choices[0].message.content.trim();
+      this.addDebugLog('info', 'Raw AI response:', { response });
+      
+      // Parse natural language response with multiple strategies
+      const analysis = this.parseAnalysisResponse(response, journalText);
 
-      const analysis = {
-        emotion: parts[0] || 'neutral',
-        sentiment: parseFloat(parts[1]) || 5,
-        stressLevel: parts[2] || 'medium',
-        insight: parts[3] || 'Take care of yourself.'
-      };
-
-      this.addDebugLog('success', 'Journal analyzed', analysis);
+      this.addDebugLog('success', 'Journal analysis completed (FR-007)', {
+        mood: analysis.mood,
+        sentiment: analysis.sentiment,
+        stressLevel: analysis.stressLevel,
+        emotionalTone: analysis.emotionalTone,
+        summary: analysis.summary
+      });
+      
       return analysis;
     } catch (error) {
       this.addDebugLog('error', `Analysis error: ${error.message}`, error);
-      // Return default values on error
+      
+      // Return comprehensive default values matching FR-007 requirements
       return {
+        mood: 'neutral',
         emotion: 'neutral',
         sentiment: 5,
+        sentimentScore: 5,
         stressLevel: 'medium',
-        insight: 'Your feelings are valid. Remember to be kind to yourself.'
+        stress: 'medium',
+        emotionalTone: 'reflective',
+        summary: journalText.substring(0, 50) + '...',
+        insight: 'Your feelings are valid. Remember to be kind to yourself.',
+        analyzedAt: new Date().toISOString(),
+        wordCount: journalText.trim().split(/\s+/).length,
+        error: true
       };
     } finally {
       this.isProcessing = false;
-      this.addDebugLog('info', 'Analysis completed');
+      this.addDebugLog('info', 'Journal analysis task completed');
     }
+  }
+
+  parseAnalysisResponse(response, journalText) {
+    const lowerResponse = response.toLowerCase();
+    
+    // Extract mood (look for emotion words)
+    let mood = 'neutral';
+    const moodPatterns = [
+      /\bmood[:\s]+([a-z]+)/i,
+      /\bemotion[:\s]+([a-z]+)/i,
+      /\bfeeling[:\s]+([a-z]+)/i,
+      /\bprimary[:\s]+(?:emotion|mood)[:\s]+([a-z]+)/i
+    ];
+    
+    for (const pattern of moodPatterns) {
+      const match = response.match(pattern);
+      if (match && match[1]) {
+        mood = match[1].toLowerCase();
+        break;
+      }
+    }
+    
+    // If no pattern match, look for common emotion words
+    const emotionWords = ['happy', 'sad', 'anxious', 'stressed', 'peaceful', 'frustrated', 'excited', 'worried', 'content', 'angry', 'hopeful', 'depressed', 'calm', 'overwhelmed', 'grateful', 'lonely', 'confused', 'confident', 'fearful', 'relieved'];
+    for (const emotion of emotionWords) {
+      if (lowerResponse.includes(emotion)) {
+        mood = emotion;
+        break;
+      }
+    }
+
+    // Extract sentiment score (0-10)
+    let sentiment = 5;
+    const sentimentPatterns = [
+      /sentiment[:\s]+(\d+(?:\.\d+)?)/i,
+      /score[:\s]+(\d+(?:\.\d+)?)/i,
+      /(\d+(?:\.\d+)?)\s*(?:\/|\bout of\b)\s*10/i,
+      /rating[:\s]+(\d+(?:\.\d+)?)/i
+    ];
+    
+    for (const pattern of sentimentPatterns) {
+      const match = response.match(pattern);
+      if (match && match[1]) {
+        const score = parseFloat(match[1]);
+        if (score >= 0 && score <= 10) {
+          sentiment = score;
+          break;
+        }
+      }
+    }
+
+    // Extract stress level
+    let stressLevel = 'medium';
+    const stressPatterns = [
+      /stress[:\s]+(low|medium|high)/i,
+      /stress level[:\s]+(low|medium|high)/i,
+      /(low|medium|high)\s+stress/i
+    ];
+    
+    for (const pattern of stressPatterns) {
+      const match = response.match(pattern);
+      if (match && match[1]) {
+        stressLevel = match[1].toLowerCase();
+        break;
+      }
+    }
+    
+    // If no explicit stress found, infer from keywords
+    if (stressLevel === 'medium') {
+      if (lowerResponse.match(/\b(very stressed|overwhelmed|anxious|panic|crisis)\b/)) {
+        stressLevel = 'high';
+      } else if (lowerResponse.match(/\b(calm|peaceful|relaxed|content)\b/)) {
+        stressLevel = 'low';
+      }
+    }
+
+    // Extract emotional tone (2-3 descriptive words)
+    let emotionalTone = 'reflective';
+    const tonePatterns = [
+      /(?:emotional )?tone[:\s]+([a-z\s,]+?)(?:\.|$|\n)/i,
+      /tone[:\s]*:?\s*([a-z\s,]+?)(?:\.|$|\n)/i,
+      /overall.*?tone.*?[:\s]+([a-z\s,]+?)(?:\.|$|\n)/i
+    ];
+    
+    for (const pattern of tonePatterns) {
+      const match = response.match(pattern);
+      if (match && match[1]) {
+        // Take first 2-3 words
+        const words = match[1].trim().split(/[\s,]+/).filter(w => w.length > 2);
+        emotionalTone = words.slice(0, 3).join(' and ');
+        break;
+      }
+    }
+
+    // Extract summary (should be 10 words or less)
+    let summary = journalText.substring(0, 60) + '...';
+    const summaryPatterns = [
+      /summary[:\s]+(.+?)(?:\.|$|\n)/i,
+      /in summary[:\s]+(.+?)(?:\.|$|\n)/i,
+      /brief summary[:\s]+(.+?)(?:\.|$|\n)/i,
+      /\d+[ -]word summary[:\s]+(.+?)(?:\.|$|\n)/i
+    ];
+    
+    for (const pattern of summaryPatterns) {
+      const match = response.match(pattern);
+      if (match && match[1]) {
+        const extracted = match[1].trim();
+        // Limit to 10 words
+        const words = extracted.split(/\s+/);
+        summary = words.slice(0, 10).join(' ');
+        if (words.length > 10) summary += '...';
+        break;
+      }
+    }
+
+    // Extract insight (supportive message)
+    let insight = 'Your feelings are valid. Remember to be kind to yourself.';
+    const insightPatterns = [
+      /insight[:\s]+(.+?)(?:\n\n|$)/is,
+      /supportive message[:\s]+(.+?)(?:\n\n|$)/is,
+      /recommendation[:\s]+(.+?)(?:\n\n|$)/is,
+      /suggestion[:\s]+(.+?)(?:\n\n|$)/is
+    ];
+    
+    for (const pattern of insightPatterns) {
+      const match = response.match(pattern);
+      if (match && match[1]) {
+        insight = match[1].trim().split('\n')[0]; // Take first paragraph
+        break;
+      }
+    }
+
+    // Build comprehensive analysis object per FR-007
+    return {
+      mood: mood,
+      emotion: mood, // Backward compatibility
+      sentiment: sentiment,
+      sentimentScore: sentiment,
+      stressLevel: stressLevel,
+      stress: stressLevel,
+      emotionalTone: emotionalTone,
+      summary: summary,
+      insight: insight,
+      analyzedAt: new Date().toISOString(),
+      wordCount: journalText.trim().split(/\s+/).length,
+      rawResponse: response // Store for debugging
+    };
   }
 
   async generateTherapyRecommendations(moodData) {

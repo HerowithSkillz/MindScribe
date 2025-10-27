@@ -26,6 +26,8 @@ const Journal = () => {
   }, [isInitialized, modelLoading, initialize]);
 
   const loadEntries = async () => {
+    // FR-007: Load existing entries with their stored analysis
+    // No re-analysis happens here - entries keep their original analysis
     const allEntries = await journalStorage.getAllItems();
     const userEntries = allEntries
       .filter(item => item.key.startsWith(`journal_${user.username}_`))
@@ -41,7 +43,8 @@ const Journal = () => {
     setIsAnalyzing(true);
 
     try {
-      // Analyze journal entry if model is ready
+      // FR-007: Analyze ONLY the current entry being saved (new or edited)
+      // Each entry gets analyzed exactly once when saved
       let analysis = {
         emotion: 'neutral',
         sentiment: 5,
@@ -51,10 +54,14 @@ const Journal = () => {
 
       if (isInitialized) {
         try {
+          // Perform AI analysis on this specific entry
           analysis = await analyzeJournal(currentEntry);
+          console.log('✅ FR-007: Journal entry analyzed successfully', analysis);
         } catch (error) {
-          console.error('Analysis error:', error);
+          console.error('❌ FR-007: Analysis error:', error);
         }
+      } else {
+        console.warn('⚠️ FR-007: Model not initialized, using default analysis');
       }
 
       const entry = {
@@ -140,6 +147,20 @@ const Journal = () => {
     return 'text-red-600';
   };
 
+  const getSentimentLabel = (sentiment) => {
+    if (sentiment >= 8) return 'Very Positive';
+    if (sentiment >= 6) return 'Positive';
+    if (sentiment >= 4) return 'Neutral';
+    if (sentiment >= 2) return 'Negative';
+    return 'Very Negative';
+  };
+
+  const getStressColor = (stress) => {
+    if (stress === 'high') return 'text-red-600';
+    if (stress === 'medium') return 'text-yellow-600';
+    return 'text-green-600';
+  };
+
   return (
     <div className="space-y-6">
       {/* Writing Area */}
@@ -193,7 +214,13 @@ const Journal = () => {
 
         {isAnalyzing && (
           <p className="text-sm text-gray-600 mt-2 text-center">
-            🤖 Analyzing your entry...
+            🤖 Analyzing this entry's mood, sentiment, and emotional tone...
+          </p>
+        )}
+        
+        {!isInitialized && !modelLoading && (
+          <p className="text-xs text-yellow-600 mt-2 text-center">
+            ⚠️ AI model not loaded. Entry will be saved without analysis.
           </p>
         )}
       </motion.div>
@@ -245,14 +272,19 @@ const Journal = () => {
                           </p>
                           <div className="flex gap-3 text-xs text-gray-600 mt-1">
                             <span className="capitalize">
-                              Mood: <strong>{entry.analysis.emotion}</strong>
+                              Mood: <strong>{entry.analysis.mood || entry.analysis.emotion}</strong>
                             </span>
                             <span className={getSentimentColor(entry.analysis.sentiment)}>
-                              Sentiment: <strong>{entry.analysis.sentiment}/10</strong>
+                              <strong>{getSentimentLabel(entry.analysis.sentiment)}</strong>
                             </span>
-                            <span>
+                            <span className={getStressColor(entry.analysis.stress)}>
                               Stress: <strong className="capitalize">{entry.analysis.stress}</strong>
                             </span>
+                            {entry.analysis.emotionalTone && (
+                              <span className="text-purple-600">
+                                Tone: <strong className="capitalize">{entry.analysis.emotionalTone}</strong>
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -271,6 +303,21 @@ const Journal = () => {
                         </button>
                       </div>
                     </div>
+                    
+                    {/* FR-007: Display 10-word summary if available */}
+                    {entry.analysis.summary && (
+                      <div className="mb-2 p-2 bg-white rounded border border-sage-300">
+                        <div className="flex justify-between items-center mb-1">
+                          <p className="text-xs text-gray-500">AI Summary</p>
+                          {entry.analysis.analyzedAt && (
+                            <p className="text-xs text-gray-400">
+                              Analyzed: {new Date(entry.analysis.analyzedAt).toLocaleDateString()}
+                            </p>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-700 italic">"{entry.analysis.summary}"</p>
+                      </div>
+                    )}
                     
                     <p className="text-gray-700 text-sm line-clamp-3 mb-2">
                       {entry.content}
