@@ -1,4 +1,5 @@
 import { CreateWebWorkerMLCEngine } from "@mlc-ai/web-llm";
+import { getHardwareTier } from '../utils/hardwareCheck';
 
 class WebLLMService {
   constructor() {
@@ -12,24 +13,24 @@ class WebLLMService {
     this.debugLogs = [];
     this.maxDebugLogs = 100;
     
-    // Available models
+    // Available models - UPDATED to match Hardware Check recommendations
     this.availableModels = [
       {
-        id: "Llama-3.2-1B-Instruct-q4f32_1-MLC",
-        name: "Llama 3.2 1B",
+        id: "Llama-3.2-1B-Instruct-q4f16_1-MLC", // Changed to q4f16 for better compatibility
+        name: "Llama 3.2 1B (Lite)",
         size: "~900MB",
         speed: "Very Fast",
         quality: "Good",
-        description: "Smallest and fastest model. Great for quick responses.",
+        description: "Smallest and fastest model. Great for older laptops/mobile.",
         recommended: true
       },
       {
-        id: "Phi-3-mini-4k-instruct-q4f16_1-MLC",
-        name: "Phi-3 Mini",
-        size: "~2GB",
+        id: "Phi-3.5-mini-instruct-q4f16_1-MLC", // UPDATED to Phi-3.5
+        name: "Phi-3.5 Mini",
+        size: "~2.2GB",
         speed: "Fast",
-        quality: "Better",
-        description: "Balanced model with good quality and speed."
+        quality: "Excellent",
+        description: "Best balance of intelligence and speed. Recommended for most laptops."
       },
       {
         id: "Llama-3.1-8B-Instruct-q4f32_1-MLC",
@@ -37,7 +38,7 @@ class WebLLMService {
         size: "~4.5GB",
         speed: "Moderate",
         quality: "Best",
-        description: "Most capable model with highest quality responses."
+        description: "Most capable model. Requires high-performance GPU (8GB+ RAM)."
       },
       {
         id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
@@ -58,6 +59,7 @@ class WebLLMService {
     ];
     
     const savedModelId = localStorage.getItem('mindscribe_selected_model');
+    // Default to the first model (Lite) if nothing saved
     this.modelId = savedModelId || this.availableModels[0].id;
     
     this.systemPrompt = `You are MindScribe, a warm, empathetic, and supportive mental health companion. Your role is to:
@@ -172,6 +174,7 @@ Remember: You are a supportive friend, not a replacement for professional therap
     this.addDebugLog('success', `Model set to ${modelId}`);
   }
 
+  // --- NEW: UPDATED INITIALIZE METHOD WITH HARDWARE CHECK ---
   async initialize(onProgress) {
     if (this.isInitialized) {
       this.addDebugLog('warning', 'Model already initialized');
@@ -184,10 +187,36 @@ Remember: You are a supportive friend, not a replacement for professional therap
     }
 
     this.isLoading = true;
-    this.addDebugLog('task', `Initializing WebLLM with model: ${this.modelId}`);
+    this.addDebugLog('task', `Initializing AI Engine...`);
 
     try {
-      // Create Web Worker for better performance
+      // 1. Hardware Capability Check
+      this.addDebugLog('info', 'Analyzing hardware capabilities...');
+      const hardwareStatus = await getHardwareTier();
+
+      if (hardwareStatus.tier === 'incompatible') {
+        throw new Error("Your device does not support WebGPU. Please use Chrome, Edge, or Brave on a desktop/laptop.");
+      }
+
+      // 2. Auto-Select Best Model
+      // We log the recommendation and update the modelId to match the hardware capability
+      const recommendedModel = hardwareStatus.recommendedModel;
+      this.addDebugLog('success', `Hardware Analysis: ${hardwareStatus.tier.toUpperCase()} Tier detected.`);
+      this.addDebugLog('info', `Recommended Model: ${recommendedModel}`);
+
+      // If the currently selected model is too heavy for the hardware, downgrade it automatically
+      // OR if it's the first run, use the recommendation.
+      // Logic: Use recommendation unless user manually picked a VALID lighter model.
+      // For safety, we will adhere to the recommendation for stability.
+      if (this.modelId !== recommendedModel) {
+        this.addDebugLog('warning', `Optimizing: Switching from ${this.modelId} to ${recommendedModel} for stability.`);
+        this.modelId = recommendedModel;
+        localStorage.setItem('mindscribe_selected_model', this.modelId);
+      }
+
+      this.addDebugLog('task', `Loading Model: ${this.modelId}`);
+
+      // 3. Create Web Worker
       this.addDebugLog('info', 'Creating Web Worker...');
       this.worker = new Worker(
         new URL('../workers/webllm.worker.js', import.meta.url),
@@ -196,7 +225,7 @@ Remember: You are a supportive friend, not a replacement for professional therap
 
       this.addDebugLog('info', 'Initializing engine in worker thread...');
       
-      // Create engine using worker
+      // 4. Initialize Engine
       this.engine = await CreateWebWorkerMLCEngine(
         this.worker,
         this.modelId,
@@ -209,13 +238,18 @@ Remember: You are a supportive friend, not a replacement for professional therap
             if (onProgress) {
               onProgress(progress);
             }
-          }
+          },
+          // Lower log level improves performance
+          logLevel: 'WARN' 
         }
       );
 
       this.isInitialized = true;
       this.isLoading = false;
       this.addDebugLog('success', `Model ${this.modelId} initialized successfully`);
+      
+      return { status: 'success', tier: hardwareStatus.tier };
+
     } catch (error) {
       this.isLoading = false;
       this.isInitialized = false;
@@ -264,7 +298,7 @@ Remember: You are a supportive friend, not a replacement for professional therap
   async chat(userMessage, conversationHistory = [], onUpdate) {
     if (!this.engine) {
       this.addDebugLog('error', 'AI engine not initialized');
-      throw new Error('Model not initialized. Please select a model first.');
+      throw new Error('Model not initialized. Please wait for loading to complete.');
     }
 
     // Wait for any ongoing tasks
@@ -641,10 +675,10 @@ Provide 3 numbered recommendations, each 1-2 sentences.`
           role: 'user',
           content: `Create a brief, encouraging mental health summary (3-4 sentences) based on:
           
-Journal Entries: ${userData.journalCount}
-Average Mood: ${userData.avgSentiment}/10
-Top Emotions: ${userData.topEmotions?.join(', ') || 'various'}
-Period: ${userData.timePeriod}
+                  Journal Entries: ${userData.journalCount}
+                  Top Emotions: ${userData.topEmotions?.join(', ') || 'various'}
+                  Average Mood: ${userData.avgSentiment}/10
+                Period: ${userData.timePeriod}
 
 Focus on progress, strengths, and gentle encouragement.`
         }
