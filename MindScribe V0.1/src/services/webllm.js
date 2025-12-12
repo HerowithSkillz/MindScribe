@@ -503,23 +503,41 @@ Provide your complete analysis:`
     // Extract summary (should be 10 words or less)
     let summary = journalText.substring(0, 60) + '...';
     const summaryPatterns = [
-      /summary[:\s]+(.+?)(?:\.|$|\n)/i,
-      /in summary[:\s]+(.+?)(?:\.|$|\n)/i,
-      /brief summary[:\s]+(.+?)(?:\.|$|\n)/i,
-      /\d+[ -]word summary[:\s]+(.+?)(?:\.|$|\n)/i
+      /summary[:\s]+["']?(.+?)["']?(?:\.|$|\n)/i,
+      /in summary[:\s]+["']?(.+?)["']?(?:\.|$|\n)/i,
+      /brief summary[:\s]+["']?(.+?)["']?(?:\.|$|\n)/i,
+      /\d+[ -]word summary[:\s]+["']?(.+?)["']?(?:\.|$|\n)/i
     ];
     
     for (const pattern of summaryPatterns) {
       const match = response.match(pattern);
       if (match && match[1]) {
-        const extracted = match[1].trim();
+        let extracted = match[1].trim();
+        
+        // FR-007: Sanitize summary - remove unwanted characters
+        // Remove quotes, excessive punctuation, special characters
+        extracted = extracted
+          .replace(/^["'\s]+|["'\s]+$/g, '') // Remove leading/trailing quotes
+          .replace(/[^\w\s.,!?-]/g, '') // Keep only words, spaces, basic punctuation
+          .replace(/\s+/g, ' ') // Normalize spaces
+          .replace(/\.{2,}/g, '') // Remove multiple dots (but keep single)
+          .trim();
+        
         // Limit to 10 words
-        const words = extracted.split(/\s+/);
+        const words = extracted.split(/\s+/).filter(w => w.length > 0);
         summary = words.slice(0, 10).join(' ');
-        if (words.length > 10) summary += '...';
+        
+        // Add period if not present and not ending with punctuation
+        if (summary && !/[.!?]$/.test(summary)) {
+          summary += '.';
+        }
+        
         break;
       }
     }
+    
+    // Final sanitization check for summary
+    summary = summary.replace(/\s+/g, ' ').trim();
 
     // Extract insight (supportive message)
     let insight = 'Your feelings are valid. Remember to be kind to yourself.';
