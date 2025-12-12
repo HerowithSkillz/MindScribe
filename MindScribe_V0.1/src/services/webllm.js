@@ -247,7 +247,8 @@ Remember: You are a supportive friend, not a replacement for professional therap
       this.isInitialized = true;
       this.isLoading = false;
       this.addDebugLog('success', `Model ${this.modelId} initialized successfully`);
-      
+      this.purgeUnusedModels();
+
       return { status: 'success', tier: hardwareStatus.tier };
 
     } catch (error) {
@@ -309,7 +310,7 @@ Remember: You are a supportive friend, not a replacement for professional therap
     this.addDebugLog('task', 'Starting chat task...');
 
     try {
-      // Build the full conversation with system prompt first, then history, then new user message
+      // Build the full conversation
       const fullMessages = [
         { role: 'system', content: this.systemPrompt },
         ...conversationHistory,
@@ -323,6 +324,10 @@ Remember: You are a supportive friend, not a replacement for professional therap
         temperature: 0.7,
         max_tokens: 500,
         stream: true,
+        // --- FIX STARTS HERE ---
+        // This forces the AI to stop if it tries to generate the user's turn
+        stop: ["<|user|>", "<|end|>", "<|system|>", "user:", "User:", "\nUser:"], 
+        // --- FIX ENDS HERE ---
         stream_options: { include_usage: true }
       });
 
@@ -714,7 +719,76 @@ Focus on progress, strengths, and gentle encouragement.`
     if (this.isInitialized) return "Ready";
     return "Engine not initialized";
   }
+
+  /**
+   * Scans the browser cache to see what models are stored
+   * and how much space they are taking.
+   */
+  async checkCache() {
+    if (!('caches' in window)) return [];
+    
+    try {
+      const keys = await caches.keys();
+      const modelCaches = [];
+      
+      for (const key of keys) {
+        // WebLLM usually namespaces caches with 'webllm/'
+        if (key.includes('webllm')) {
+          const cache = await caches.open(key);
+          const requests = await cache.keys();
+          modelCaches.push({
+            name: key,
+            entries: requests.length, // This explains the "98 entries"
+            isCurrent: key.includes(this.modelId) // Check if it's the one we are using
+          });
+        }
+      }
+      return modelCaches;
+    } catch (err) {
+      console.error("Cache check failed", err);
+      return [];
+    }
+  }
+
+  /**
+   * Deletes a specific model from the cache to free up space.
+   */
+  async deleteModelFromCache(cacheName) {
+    try {
+      this.addDebugLog('task', `Deleting old cache: ${cacheName}...`);
+      await caches.delete(cacheName);
+      this.addDebugLog('success', `Deleted ${cacheName}`);
+      return true;
+    } catch (err) {
+      this.addDebugLog('error', `Failed to delete ${cacheName}`, err);
+      return false;
+    }
+  }
+
+  /**
+   * "Smart Clean": Deletes everything EXCEPT the current recommended model.
+   */
+  async purgeUnusedModels() {
+    const cachesList = await this.checkCache();
+    let deletedCount = 0;
+
+    for (const cache of cachesList) {
+      // If the cache name doesn't match our current active model ID
+      if (!cache.name.includes(this.modelId)) {
+        await this.deleteModelFromCache(cache.name);
+        deletedCount++;
+      }
+    }
+    
+    if (deletedCount > 0) {
+      this.addDebugLog('success', `Cleanup complete. Removed ${deletedCount} old models.`);
+    } else {
+      this.addDebugLog('info', 'Storage is already clean. No old models found.');
+    }
+  }
 }
+
+
 
 // Singleton instance
 const webLLMService = new WebLLMService();

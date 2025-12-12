@@ -155,3 +155,17 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ---
 
 Made with ❤️ for mental health awareness
+
+📋 [TASK] Initializing AI Engine... 
+
+webllm.js:111 ℹ️ [INFO] Analyzing hardware capabilities... 
+
+webllm.js:111 ⚠️ [WARNING] Model is already loading 
+
+hardwareCheck.js:19 [HardwareCheck] Max Buffer Size: 2048.00 MB
+
+webllm.js:111 ✅ [SUCCESS] Hardware Analysis: MEDIUM Tier detected. 
+
+webllm.js:111 ℹ️ [INFO] Recommended Model: Phi-3-mini-4k-instruct-q4f16_1-MLC 
+
+webllm.js:111 📋 [TASK] Loading Model: Phi-3-mini-4k-instruct-q4f16_1-MLC 
