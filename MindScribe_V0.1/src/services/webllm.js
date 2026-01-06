@@ -1,26 +1,10 @@
 import { CreateWebWorkerMLCEngine } from "@mlc-ai/web-llm";
 import { getHardwareTier } from '../utils/hardwareCheck';
 
-// --- CRITICAL CONFIGURATION: MLC-COMPATIBLE URLS ---
-// We explicitly define the model records to ensure WebLLM downloads the correct BINARY files.
-const APP_CONFIG = {
-  model_list: [
-    {
-      "model": "https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC",
-      "model_id": "Llama-3.2-1B-Instruct-q4f16_1-MLC",
-      "model_lib": "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0.2.48/Llama-3.2-1B-Instruct-q4f16_1-ctx4k-webgpu.wasm",
-      "vram_required_MB": 1200,
-      "low_resource_required": true,
-      "required_features": ["shader-f16"],
-    },
-    {
-      "model": "https://huggingface.co/mlc-ai/Phi-3.5-mini-instruct-q4f16_1-MLC",
-      "model_id": "Phi-3.5-mini-instruct-q4f16_1-MLC",
-      "model_lib": "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/phi-3.5-mini-instruct-q4f16_1-webgpu.wasm",
-      "vram_required_MB": 2800,
-    }
-  ]
-};
+// ✅ FIXED: Use WebLLM's built-in prebuilt models instead of custom URLs
+// According to docs: https://webllm.mlc.ai/docs/user/basic_usage.html#model-records-in-webllm
+// WebLLM v0.2.75 has its own model registry with correct WASM library versions
+// Just pass the model_id and WebLLM handles everything automatically
 
 class WebLLMService {
   constructor() {
@@ -34,27 +18,28 @@ class WebLLMService {
     this.debugLogs = [];
     this.maxDebugLogs = 100;
     
-    // Default to the Lite model (Llama 3.2 1B) for speed
-    this.modelId = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+    // Default to the Lite model (Llama 3.2 1B) - matches WebLLM prebuilt config
+    // Model IDs must exactly match those in: https://github.com/mlc-ai/web-llm/blob/main/src/config.ts
+    this.modelId = "Llama-3.2-1B-Instruct-q4f32_1-MLC";
     
-    // UI-Friendly List
+    // UI-Friendly List - Updated to match WebLLM v0.2.75 prebuilt models
     this.availableModels = [
       {
-        id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+        id: "Llama-3.2-1B-Instruct-q4f32_1-MLC",
         name: "Llama 3.2 1B (Lite)",
-        size: "~900MB",
+        size: "~1.1GB",
         speed: "Very Fast",
         quality: "Good",
         description: "Fastest model. Best for standard laptops.",
         recommended: true
       },
       {
-        id: "Phi-3.5-mini-instruct-q4f16_1-MLC",
-        name: "Phi-3.5 Mini",
-        size: "~2.2GB",
+        id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
+        name: "Llama 3.2 3B",
+        size: "~1.9GB",
         speed: "Fast",
-        quality: "Excellent",
-        description: "High intelligence. Requires decent GPU."
+        quality: "Better",
+        description: "Balanced performance. Good for most use cases."
       }
     ];
 
@@ -145,7 +130,10 @@ Instructions:
         { type: 'module' }
       );
 
-      // 3. Engine Creation with Strict Config
+      // 3. Engine Creation - Let WebLLM Handle Model URLs
+      // According to WebLLM docs: https://webllm.mlc.ai/docs/user/basic_usage.html
+      // Simply pass the model ID - WebLLM's prebuilt config handles everything
+      // This ensures version compatibility (v0.2.75) and automatic caching
       this.engine = await CreateWebWorkerMLCEngine(
         this.worker,
         this.modelId,
@@ -153,13 +141,7 @@ Instructions:
           initProgressCallback: (progress) => {
             if (onProgress) onProgress(progress);
           },
-          logLevel: 'WARN',
-          // CRITICAL: Pass the APP_CONFIG with model records here
-          appConfig: {
-            model_list: APP_CONFIG.model_list,
-            useCache: true, // Forces usage of cached files
-            cacheAdapter: "cache"
-          }
+          logLevel: 'WARN'
         }
       );
 
