@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import webLLMService from '../services/webllm';
+import { setWebLLMInitialize } from './AuthContext';
 
 const WebLLMContext = createContext(null);
 
@@ -18,6 +19,7 @@ export const WebLLMProvider = ({ children }) => {
   const [error, setError] = useState(null);
   const [availableModels, setAvailableModels] = useState([]);
   const [currentModel, setCurrentModel] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // Load available models on mount
   React.useEffect(() => {
@@ -71,13 +73,18 @@ export const WebLLMProvider = ({ children }) => {
     }
   }, []);
 
-  const initialize = useCallback(async () => {
+  const initialize = useCallback(async (isRetry = false) => {
     if (isInitialized || isLoading) return;
 
     setIsLoading(true);
     setError(null);
 
     try {
+      // Cleanup before retry to prevent cache corruption
+      if (isRetry) {
+        await webLLMService.unloadModel().catch(() => {});
+      }
+
       await webLLMService.initialize((progressReport) => {
         setProgress({
           text: progressReport.text || 'Loading model...',
@@ -86,14 +93,40 @@ export const WebLLMProvider = ({ children }) => {
       });
 
       setIsInitialized(true);
+      setRetryCount(0); // Reset retry counter on success
       setProgress({ text: 'Model ready!', progress: 1 });
     } catch (err) {
       console.error('WebLLM initialization failed:', err);
-      setError(err.message || 'Failed to initialize AI model');
+      
+      const currentRetryCount = isRetry ? retryCount : 0;
+      
+      // Auto-retry with exponential backoff (max 2 auto-retries)
+      if (currentRetryCount < 2) {
+        const delay = 2000 * Math.pow(2, currentRetryCount); // 2s, 4s
+        const nextRetry = currentRetryCount + 1;
+        setRetryCount(nextRetry);
+        
+        setError({
+          message: `${err.message || 'Failed to initialize AI model'}. Retrying in ${delay/1000}s... (${nextRetry}/2)`,
+          canRetry: false,
+          isAutoRetrying: true
+        });
+        
+        // Automatic retry with exponential backoff
+        setTimeout(() => initialize(true), delay);
+      } else {
+        // Final failure after all retries - offer manual retry
+        setError({
+          message: err.message || 'Failed to initialize AI model after multiple attempts.',
+          canRetry: true,
+          isAutoRetrying: false,
+          suggestion: 'Please check your internet connection and GPU availability, then try again.'
+        });
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [isInitialized, isLoading]);
+  }, [isInitialized, isLoading, retryCount]);
 
   const chat = useCallback(async (message, history = [], onStream = null) => {
     if (!isInitialized) {
@@ -127,6 +160,16 @@ export const WebLLMProvider = ({ children }) => {
     return webLLMService.cancelChat();
   }, []);
 
+  const retryInitialization = useCallback(async () => {
+    setRetryCount(0); // Reset retry counter for fresh attempt
+    await initialize(true);
+  }, [initialize]);
+
+  // Register initialize function with AuthContext for auto-initialization on login
+  useEffect(() => {
+    setWebLLMInitialize(initialize);
+  }, [initialize]);
+
   const value = {
     isInitialized,
     isLoading,
@@ -142,7 +185,8 @@ export const WebLLMProvider = ({ children }) => {
     analyzeJournal,
     generateRecommendations,
     generateReport,
-    cancelChat
+    cancelChat,
+    retryInitialization
   };
 
   return <WebLLMContext.Provider value={value}>{children}</WebLLMContext.Provider>;

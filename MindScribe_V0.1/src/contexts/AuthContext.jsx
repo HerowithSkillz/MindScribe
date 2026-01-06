@@ -5,6 +5,13 @@ import webLLMService from '../services/webllm';
 
 const AuthContext = createContext(null);
 
+// WebLLMContext import to trigger model initialization on login
+let webLLMInitialize = null;
+
+export const setWebLLMInitialize = (initFn) => {
+  webLLMInitialize = initFn;
+};
+
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
@@ -33,6 +40,14 @@ export const AuthProvider = ({ children }) => {
       await journalStorage.setEncryptionKey(password);
       await chatStorage.setEncryptionKey(password);
       await analysisStorage.setEncryptionKey(password);
+      
+      // Initialize AI model immediately (no delay)
+      if (webLLMInitialize) {
+        // Use Promise to not block navigation, but start immediately
+        webLLMInitialize().catch(err => 
+          console.warn('AI model initialization error:', err)
+        );
+      }
     }
     return result;
   };
@@ -46,6 +61,14 @@ export const AuthProvider = ({ children }) => {
       await journalStorage.setEncryptionKey(password);
       await chatStorage.setEncryptionKey(password);
       await analysisStorage.setEncryptionKey(password);
+      
+      // Initialize AI model immediately (no delay)
+      if (webLLMInitialize) {
+        // Use Promise to not block navigation, but start immediately
+        webLLMInitialize().catch(err => 
+          console.warn('AI model initialization error:', err)
+        );
+      }
     }
     return result;
   };

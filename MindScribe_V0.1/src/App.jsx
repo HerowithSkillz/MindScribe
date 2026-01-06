@@ -5,6 +5,7 @@ import { WebLLMProvider } from './contexts/WebLLMContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/Login';
 import Layout from './components/Layout';
+import ModelInitializationModal from './components/ModelInitializationModal';
 import Chat from './pages/Chat';
 import Journal from './pages/Journal';
 import Dashboard from './pages/Dashboard';
@@ -111,6 +112,7 @@ function App() {
     <Router>
       <AuthProvider>
         <WebLLMProvider>
+          <ModelInitializationModal />
           <AppRoutes />
         </WebLLMProvider>
       </AuthProvider>
