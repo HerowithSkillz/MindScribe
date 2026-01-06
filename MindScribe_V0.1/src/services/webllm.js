@@ -265,9 +265,9 @@ Provide:
       this.addDebugLog('error', `Analysis error: ${error.message}`);
       // Fallback object to prevent UI crash
       return {
-        mood: 'neutral',
+        emotion: 'neutral',
         sentiment: 5,
-        stressLevel: 'medium',
+        stress: 'moderate',
         summary: journalText.substring(0, 50) + '...',
         insight: 'Keep writing to understand your feelings better.',
         error: true
@@ -281,12 +281,12 @@ Provide:
   parseAnalysisResponse(response, journalText) {
     const lowerResponse = response.toLowerCase();
     
-    // 1. Mood Extraction
-    let mood = 'neutral';
-    const moodPatterns = [/\bmood[:\s]+([a-z]+)/i, /\bemotion[:\s]+([a-z]+)/i];
-    for (const pattern of moodPatterns) {
+    // 1. Emotion Extraction (standardized field name)
+    let emotion = 'neutral';
+    const emotionPatterns = [/\bmood[:\s]+([a-z]+)/i, /\bemotion[:\s]+([a-z]+)/i];
+    for (const pattern of emotionPatterns) {
       const match = response.match(pattern);
-      if (match && match[1]) { mood = match[1].toLowerCase(); break; }
+      if (match && match[1]) { emotion = match[1].toLowerCase(); break; }
     }
 
     // 2. Sentiment Extraction
@@ -294,10 +294,11 @@ Provide:
     const scoreMatch = response.match(/(\d+(?:\.\d+)?)\s*\/\s*10/);
     if (scoreMatch) sentiment = parseFloat(scoreMatch[1]);
 
-    // 3. Stress Level
-    let stressLevel = 'medium';
-    if (lowerResponse.includes('high stress')) stressLevel = 'high';
-    else if (lowerResponse.includes('low stress')) stressLevel = 'low';
+    // 3. Stress Level (standardized field name)
+    let stress = 'moderate';
+    if (lowerResponse.includes('high stress')) stress = 'high';
+    else if (lowerResponse.includes('low stress')) stress = 'low';
+    else if (lowerResponse.includes('medium stress')) stress = 'moderate';
 
     // 4. Summary Extraction
     let summary = journalText.substring(0, 60) + '...';
@@ -305,9 +306,9 @@ Provide:
     if (summaryMatch) summary = summaryMatch[1].trim();
 
     return {
-      mood,
+      emotion,
       sentiment,
-      stressLevel,
+      stress,
       summary,
       analyzedAt: new Date().toISOString()
     };

@@ -264,7 +264,7 @@ const Journal = () => {
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex items-center gap-2">
                         <span className="text-2xl">
-                          {getEmotionEmoji(entry.analysis.emotion)}
+                          {getEmotionEmoji(entry.analysis?.emotion || entry.analysis?.mood || 'neutral')}
                         </span>
                         <div>
                           <p className="text-sm font-medium text-gray-700">
@@ -272,13 +272,13 @@ const Journal = () => {
                           </p>
                           <div className="flex gap-3 text-xs text-gray-600 mt-1">
                             <span className="capitalize">
-                              Mood: <strong>{entry.analysis.mood || entry.analysis.emotion}</strong>
+                              Mood: <strong>{entry.analysis?.emotion || entry.analysis?.mood || 'neutral'}</strong>
                             </span>
-                            <span className={getSentimentColor(entry.analysis.sentiment)}>
-                              <strong>{getSentimentLabel(entry.analysis.sentiment)}</strong>
+                            <span className={getSentimentColor(entry.analysis?.sentiment || 5)}>
+                              <strong>{getSentimentLabel(entry.analysis?.sentiment || 5)}</strong>
                             </span>
-                            <span className={getStressColor(entry.analysis.stress)}>
-                              Stress: <strong className="capitalize">{entry.analysis.stress}</strong>
+                            <span className={getStressColor(entry.analysis?.stress || entry.analysis?.stressLevel || 'moderate')}>
+                              Stress: <strong className="capitalize">{entry.analysis?.stress || entry.analysis?.stressLevel || 'moderate'}</strong>
                             </span>
                             {entry.analysis.emotionalTone && (
                               <span className="text-purple-600">
