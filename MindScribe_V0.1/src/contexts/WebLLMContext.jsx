@@ -30,16 +30,29 @@ export const WebLLMProvider = ({ children }) => {
     setCurrentModel(currentModelObj);
   }, []);
 
-  const selectModel = useCallback((modelId) => {
+  const selectModel = useCallback(async (modelId) => {
     try {
-      webLLMService.setModel(modelId);
-      const currentModelId = webLLMService.getCurrentModel();
+      setIsLoading(true);
+      setError(null); // Clear any previous errors
+      
+      // Wait for model to unload before proceeding (fixes race condition)
+      await webLLMService.setModel(modelId);
+      
+      // Model needs re-initialization after switch
+      setIsInitialized(false);
+      
+      // Update current model in UI
       const models = webLLMService.getAvailableModels();
-      const currentModelObj = models.find(m => m.id === currentModelId);
+      const currentModelObj = models.find(m => m.id === modelId);
       setCurrentModel(currentModelObj);
+      
+      console.log(`Model switched to ${currentModelObj?.name || modelId}`);
     } catch (err) {
       console.error('Failed to select model:', err);
+      setError(err.message || 'Failed to switch model');
       throw err; // Re-throw for caller to handle
+    } finally {
+      setIsLoading(false); // Always cleanup loading state
     }
   }, []);
 

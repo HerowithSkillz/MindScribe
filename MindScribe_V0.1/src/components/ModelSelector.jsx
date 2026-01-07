@@ -72,11 +72,16 @@ const ModelSelector = ({ isOpen, onClose }) => {
     }
   };
 
-  if (!isOpen) return null;
+  // Defensive check: Ensure availableModels exists and has items
+  if (!availableModels || availableModels.length === 0) {
+    return null;
+  }
 
   return (
-    <AnimatePresence>
-      <motion.div
+    <>
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -171,13 +176,13 @@ const ModelSelector = ({ isOpen, onClose }) => {
 
           {/* Model Cards */}
           <div className="p-6 space-y-4">
-            {availableModels.map((model) => {
+            {availableModels.map((model, index) => {
               const isSelected = currentModel?.id === model.id;
               const isActive = isInitialized && isSelected;
               
               return (
                 <motion.div
-                  key={model.id}
+                  key={model.id || `model-${index}`}  // Use index as fallback to ensure uniqueness
                   whileHover={{ scale: isActive ? 1 : 1.02 }}
                   className={`
                     relative p-5 rounded-xl border-2 cursor-pointer transition-all
@@ -270,6 +275,8 @@ const ModelSelector = ({ isOpen, onClose }) => {
           </div>
         </motion.div>
       </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Confirm Unload Dialog */}
       <AnimatePresence>
@@ -340,7 +347,7 @@ const ModelSelector = ({ isOpen, onClose }) => {
           </motion.div>
         )}
       </AnimatePresence>
-    </AnimatePresence>
+    </>
   );
 };
 
