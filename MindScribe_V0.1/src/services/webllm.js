@@ -197,8 +197,9 @@ Instructions:
         temperature: 0.7,
         max_tokens: 350,
         stream: true,
-        // STOP TOKENS: Critical for Llama 3 to prevent hallucinations
-        stop: ["<|eot_id|>", "<|start_header_id|>", "<|end_header_id|>", "user:", "User:", "\nUser"]
+        // Stop tokens are handled automatically by WebLLM from model config
+        // Llama 3.2 uses stop_token_ids: [128001, 128008, 128009] from conversation template
+        // No custom stop strings needed - removes risk of premature stopping
       });
 
       let fullResponse = '';
