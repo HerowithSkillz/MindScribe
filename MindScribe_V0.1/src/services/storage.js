@@ -28,8 +28,19 @@ const analysisStore = localforage.createInstance({
 
 // Encryption utilities using Web Crypto API
 class CryptoService {
-  static async generateKey(password) {
+  // Generate unique salt for new users
+  static generateSalt() {
+    return window.crypto.getRandomValues(new Uint8Array(16));
+  }
+
+  static async generateKey(password, salt) {
     const encoder = new TextEncoder();
+    
+    // Validate salt parameter
+    if (!salt || !(salt instanceof Uint8Array)) {
+      throw new Error('Valid salt (Uint8Array) is required for key generation');
+    }
+
     const keyMaterial = await window.crypto.subtle.importKey(
       'raw',
       encoder.encode(password),
@@ -41,7 +52,7 @@ class CryptoService {
     return window.crypto.subtle.deriveKey(
       {
         name: 'PBKDF2',
-        salt: encoder.encode('mindscribe-salt-2025'),
+        salt: salt, // Use provided user-specific salt
         iterations: 100000,
         hash: 'SHA-256'
       },
@@ -87,9 +98,11 @@ class StorageService {
     this.encryptionKey = null;
   }
 
-  async setEncryptionKey(password) {
+  async setEncryptionKey(password, salt) {
     if (this.useEncryption && password) {
-      this.encryptionKey = await CryptoService.generateKey(password);
+      // Convert salt array back to Uint8Array if needed
+      const saltArray = salt instanceof Uint8Array ? salt : new Uint8Array(salt);
+      this.encryptionKey = await CryptoService.generateKey(password, saltArray);
     }
   }
 
@@ -181,5 +194,8 @@ export const journalStorage = new StorageService(journalStore, true);
 export const chatStorage = new StorageService(chatStore, true);
 export const settingsStorage = new StorageService(settingsStore, false);
 export const analysisStorage = new StorageService(analysisStore, true);
+
+// Export CryptoService for salt generation in auth
+export { CryptoService };
 
 export default StorageService;

@@ -13,8 +13,15 @@ class AuthService {
         throw new Error('Username already exists');
       }
 
-      // Hash password (simple approach - in production, use stronger hashing)
-      const hashedPassword = await this.hashPassword(password);
+      // Generate unique salt for this user (CRITICAL SECURITY FIX)
+      const { CryptoService } = await import('./storage');
+      const userSalt = CryptoService.generateSalt();
+      
+      // Store salt (not secret, can be stored plainly)
+      await userStorage.save(`salt_${username}`, Array.from(userSalt));
+
+      // Hash password with salt for authentication
+      const hashedPassword = await this.hashPassword(password, userSalt);
 
       // Create user object
       const user = {
@@ -25,8 +32,8 @@ class AuthService {
         lastLogin: new Date().toISOString()
       };
 
-      // Set encryption key for user's data
-      await userStorage.setEncryptionKey(password);
+      // Set encryption key for user's data with their unique salt
+      await userStorage.setEncryptionKey(password, userSalt);
 
       // Save user
       await userStorage.save(`user_${username}`, user);
@@ -46,8 +53,17 @@ class AuthService {
 
   async login(username, password) {
     try {
-      // Set encryption key
-      await userStorage.setEncryptionKey(password);
+      // Fetch user's unique salt (CRITICAL SECURITY FIX)
+      const saltArray = await userStorage.get(`salt_${username}`);
+      
+      if (!saltArray) {
+        throw new Error('Invalid username or password');
+      }
+
+      const userSalt = new Uint8Array(saltArray);
+
+      // Set encryption key with user's salt
+      await userStorage.setEncryptionKey(password, userSalt);
 
       // Get user
       const user = await userStorage.get(`user_${username}`);
@@ -56,8 +72,8 @@ class AuthService {
         throw new Error('Invalid username or password');
       }
 
-      // Verify password
-      const hashedPassword = await this.hashPassword(password);
+      // Verify password with salt
+      const hashedPassword = await this.hashPassword(password, userSalt);
       if (user.password !== hashedPassword) {
         throw new Error('Invalid username or password');
       }
@@ -105,36 +121,62 @@ class AuthService {
     return this.getCurrentUser() !== null;
   }
 
-  async hashPassword(password) {
-    // Simple hash using Web Crypto API
+  async hashPassword(password, salt) {
+    // Use PBKDF2 with salt for secure password hashing
     const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(password),
+      'PBKDF2',
+      false,
+      ['deriveBits']
+    );
+    
+    const hashBuffer = await crypto.subtle.deriveBits(
+      {
+        name: 'PBKDF2',
+        salt: salt,
+        iterations: 100000,
+        hash: 'SHA-256'
+      },
+      keyMaterial,
+      256
+    );
+    
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
   async updatePassword(username, oldPassword, newPassword) {
     try {
-      // Verify old password
-      await userStorage.setEncryptionKey(oldPassword);
+      // Fetch user's salt
+      const saltArray = await userStorage.get(`salt_${username}`);
+      if (!saltArray) {
+        throw new Error('User not found');
+      }
+      
+      const userSalt = new Uint8Array(saltArray);
+
+      // Verify old password with salt
+      await userStorage.setEncryptionKey(oldPassword, userSalt);
       const user = await userStorage.get(`user_${username}`);
       
       if (!user) {
         throw new Error('User not found');
       }
 
-      const oldHash = await this.hashPassword(oldPassword);
+      const oldHash = await this.hashPassword(oldPassword, userSalt);
       if (user.password !== oldHash) {
         throw new Error('Current password is incorrect');
       }
 
-      // Update password
-      const newHash = await this.hashPassword(newPassword);
+      // Update password with same salt (salt doesn't change on password update)
+      const newHash = await this.hashPassword(newPassword, userSalt);
       user.password = newHash;
 
-      // Re-encrypt with new password
-      await userStorage.setEncryptionKey(newPassword);
+      // Re-encrypt with new password and existing salt
+      await userStorage.setEncryptionKey(newPassword, userSalt);
       await userStorage.save(`user_${username}`, user);
 
       return { success: true };

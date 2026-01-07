@@ -36,10 +36,14 @@ export const AuthProvider = ({ children }) => {
     if (result.success) {
       setUser(result.user);
       
-      // Initialize storage encryption keys
-      await journalStorage.setEncryptionKey(password);
-      await chatStorage.setEncryptionKey(password);
-      await analysisStorage.setEncryptionKey(password);
+      // Fetch user's unique salt for encryption
+      const saltArray = await userStorage.get(`salt_${username}`);
+      const userSalt = new Uint8Array(saltArray);
+      
+      // Initialize storage encryption keys with user-specific salt
+      await journalStorage.setEncryptionKey(password, userSalt);
+      await chatStorage.setEncryptionKey(password, userSalt);
+      await analysisStorage.setEncryptionKey(password, userSalt);
       
       // Initialize AI model immediately (no delay)
       if (webLLMInitialize) {
@@ -57,10 +61,14 @@ export const AuthProvider = ({ children }) => {
     if (result.success) {
       setUser(result.user);
       
-      // Initialize storage encryption keys
-      await journalStorage.setEncryptionKey(password);
-      await chatStorage.setEncryptionKey(password);
-      await analysisStorage.setEncryptionKey(password);
+      // Fetch user's unique salt (already created by authService.register)
+      const saltArray = await userStorage.get(`salt_${username}`);
+      const userSalt = new Uint8Array(saltArray);
+      
+      // Initialize storage encryption keys with user-specific salt
+      await journalStorage.setEncryptionKey(password, userSalt);
+      await chatStorage.setEncryptionKey(password, userSalt);
+      await analysisStorage.setEncryptionKey(password, userSalt);
       
       // Initialize AI model immediately (no delay)
       if (webLLMInitialize) {
