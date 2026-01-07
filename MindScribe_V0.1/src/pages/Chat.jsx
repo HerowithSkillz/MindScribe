@@ -18,19 +18,11 @@ const Chat = () => {
   
   const messagesEndRef = useRef(null);
   const streamBufferRef = useRef('');
-  const animationFrameRef = useRef(null);
   const { chat, cancelChat, isInitialized, isLoading: modelLoading, initialize, progress, currentModel } = useWebLLM();
   const { user } = useAuth();
 
   useEffect(() => {
     loadChatHistory();
-    
-    // Cleanup animation frame on unmount
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
   }, []);
 
   useEffect(() => {
@@ -59,19 +51,12 @@ const Chat = () => {
     await chatStorage.save(`chat_${user.username}`, newMessages);
   };
 
-  // Optimized streaming update using requestAnimationFrame for smooth rendering
+  // Direct streaming update - no throttling for smooth, water-like flow
+  // WebLLM chunks are already optimized, no need to batch
   const updateStreamingMessage = (chunk) => {
     streamBufferRef.current += chunk;
-    
-    // Cancel previous animation frame if it exists
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-    
-    // Schedule update on next animation frame for smooth rendering
-    animationFrameRef.current = requestAnimationFrame(() => {
-      setStreamingMessage(streamBufferRef.current);
-    });
+    // Update React state immediately for each chunk
+    setStreamingMessage(streamBufferRef.current);
   };
 
   const handleSend = async () => {
@@ -109,11 +94,8 @@ const Chat = () => {
         }
       );
 
-      // Cancel any pending animation frame
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
+      // Ensure final update with complete message
+      setStreamingMessage(streamBufferRef.current);
 
       const aiMessage = {
         role: 'assistant',
@@ -137,11 +119,13 @@ const Chat = () => {
     } catch (error) {
       console.error('Chat error:', error);
       
+      // Always cleanup streaming state on error
+      setStreamingMessage('');
+      streamBufferRef.current = '';
+      lastUpdateTimeRef.current = 0;
+      
       // Handle cancellation differently
       if (error.message === "Request cancelled") {
-        // Clear the streaming message
-        setStreamingMessage('');
-        streamBufferRef.current = '';
         // Don't add error message for cancelled requests
       } else {
         const errorMessage = {
@@ -162,10 +146,7 @@ const Chat = () => {
       setIsLoading(false);
       setStreamingMessage('');
       streamBufferRef.current = '';
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
+      lastUpdateTimeRef.current = 0;
     }
   };
 

@@ -194,8 +194,10 @@ Instructions:
 
       const chunks = await this.engine.chat.completions.create({
         messages: fullMessages,
-        temperature: 0.7,
-        max_tokens: 350,
+        temperature: 0.3, // Lower temp = faster, more deterministic generation (was 0.7)
+        top_p: 0.9, // Nucleus sampling for quality while maintaining speed
+        max_tokens: 512, // Increased for better response completeness (was 350)
+        repetition_penalty: 1.0, // Default value, prevents repetitive loops
         stream: true,
         // Stop tokens are handled automatically by WebLLM from model config
         // Llama 3.2 uses stop_token_ids: [128001, 128008, 128009] from conversation template
