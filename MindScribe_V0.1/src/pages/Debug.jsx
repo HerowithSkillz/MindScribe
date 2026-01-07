@@ -50,6 +50,18 @@ const Debug = () => {
     }
   };
 
+  const handleClearCache = async () => {
+    if (window.confirm('Clear all WebLLM model cache? This will force models to re-download. Use this if you\'re experiencing model loading issues.')) {
+      const success = await webLLMService.clearAllCache();
+      if (success) {
+        alert('Cache cleared successfully! Please reload the page.');
+      } else {
+        alert('Failed to clear cache. Please try manually clearing browser data.');
+      }
+      loadLogs(); // Refresh to see cache clear log
+    }
+  };
+
   const filteredLogs = filter === 'all' 
     ? logs 
     : logs.filter(log => log.type === filter);
@@ -208,6 +220,13 @@ const Debug = () => {
               className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
             >
               🔄 Refresh
+            </button>
+            <button
+              onClick={handleClearCache}
+              className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
+              title="Clear all WebLLM model cache (use if models fail to load)"
+            >
+              💾 Clear Cache
             </button>
             <button
               onClick={handleClearLogs}

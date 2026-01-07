@@ -22,10 +22,11 @@ class WebLLMService {
     // Model IDs must exactly match those in: https://github.com/mlc-ai/web-llm/blob/main/src/config.ts
     this.modelId = "Llama-3.2-1B-Instruct-q4f32_1-MLC";
     
-    // UI-Friendly List - Updated to match WebLLM v0.2.75 prebuilt models
+    // UI-Friendly List - FIXED: Exact match with WebLLM v0.2.75 prebuilt models
+    // Source: https://github.com/mlc-ai/web-llm/blob/main/src/config.ts#L300-L400
     this.availableModels = [
       {
-        id: "Llama-3.2-1B-Instruct-q4f32_1-MLC",
+        id: "Llama-3.2-1B-Instruct-q4f32_1-MLC", // ✅ Exact prebuilt model_id
         name: "Llama 3.2 1B (Lite)",
         size: "~1.1GB",
         speed: "Very Fast",
@@ -34,9 +35,9 @@ class WebLLMService {
         recommended: true
       },
       {
-        id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
+        id: "Llama-3.2-3B-Instruct-q4f16_1-MLC", // ✅ Exact prebuilt model_id
         name: "Llama 3.2 3B",
-        size: "~1.9GB",
+        size: "~1.9GB (2.26GB VRAM)",
         speed: "Fast",
         quality: "Better",
         description: "Balanced performance. Good for most use cases."
@@ -118,6 +119,11 @@ Instructions:
     this.addDebugLog('task', `Initializing AI Engine (${this.modelId})...`);
 
     try {
+      // 0. Check WebGPU Support (Issue #10 fix)
+      if (!navigator.gpu) {
+        throw new Error('WebGPU is not supported. Please use Chrome 113+ or Edge 113+');
+      }
+
       // 1. Hardware Check (Silent)
       try {
          const hw = await getHardwareTier();
@@ -133,7 +139,7 @@ Instructions:
       // 3. Engine Creation - Let WebLLM Handle Model URLs
       // According to WebLLM docs: https://webllm.mlc.ai/docs/user/basic_usage.html
       // Simply pass the model ID - WebLLM's prebuilt config handles everything
-      // This ensures version compatibility (v0.2.75) and automatic caching
+      // This ensures version compatibility (v0.2.79) and automatic caching
       this.engine = await CreateWebWorkerMLCEngine(
         this.worker,
         this.modelId,
@@ -155,8 +161,17 @@ Instructions:
     } catch (error) {
       this.isLoading = false;
       this.isInitialized = false;
-      this.addDebugLog('error', `Init failed: ${error.message}`, error);
-      throw error;
+      
+      // Provide helpful error messages for common issues
+      let friendlyMessage = error.message;
+      if (error.message && error.message.includes('fetch')) {
+        friendlyMessage = 'Failed to download model. Please check your internet connection. The model may also be blocked by your firewall or corporate network.';
+      } else if (error.message && error.message.includes('WebGPU')) {
+        friendlyMessage = 'WebGPU is not supported in your browser. Please use Chrome 113+ or Edge 113+';
+      }
+      
+      this.addDebugLog('error', `Init failed: ${friendlyMessage}`, error);
+      throw new Error(friendlyMessage);
     }
   }
 
@@ -361,6 +376,20 @@ Provide:
       const keys = await caches.keys();
       return keys.filter(k => k.includes('webllm')).map(k => ({ name: k }));
     } catch (err) { return []; }
+  }
+
+  async clearAllCache() {
+    if (!('caches' in window)) return false;
+    try {
+      const keys = await caches.keys();
+      const webllmCaches = keys.filter(k => k.includes('webllm'));
+      await Promise.all(webllmCaches.map(key => caches.delete(key)));
+      this.addDebugLog('success', `Cleared ${webllmCaches.length} cache(s)`);
+      return true;
+    } catch (err) {
+      this.addDebugLog('error', 'Failed to clear cache', err);
+      return false;
+    }
   }
 
   async deleteModelFromCache(cacheName) {
