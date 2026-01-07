@@ -170,6 +170,18 @@ export const WebLLMProvider = ({ children }) => {
     setWebLLMInitialize(initialize);
   }, [initialize]);
 
+  // Cleanup model on component unmount (React best practice & memory leak prevention)
+  useEffect(() => {
+    return () => {
+      // Only attempt cleanup if model was initialized
+      if (isInitialized) {
+        webLLMService.unloadModel()
+          .then(() => console.log('Model unloaded successfully on component unmount'))
+          .catch(err => console.warn('Error unloading model on unmount:', err));
+      }
+    };
+  }, [isInitialized]);
+
   const value = {
     isInitialized,
     isLoading,
