@@ -183,17 +183,10 @@ export const WebLLMProvider = ({ children }) => {
     setWebLLMInitialize(initialize);
   }, [initialize]);
 
-  // Cleanup model on component unmount (React best practice & memory leak prevention)
-  useEffect(() => {
-    return () => {
-      // Only attempt cleanup if model was initialized
-      if (isInitialized) {
-        webLLMService.unloadModel()
-          .then(() => console.log('Model unloaded successfully on component unmount'))
-          .catch(err => console.warn('Error unloading model on unmount:', err));
-      }
-    };
-  }, [isInitialized]);
+  // CRITICAL FIX: Don't cleanup on unmount - WebLLMProvider should persist throughout app lifecycle
+  // The provider wraps the entire app in App.jsx, so unmount = app closing
+  // Aggressive cleanup causes "Module has already been disposed" errors during navigation
+  // Model cleanup should only happen on: logout, model switch, or explicit unload
 
   const value = {
     isInitialized,

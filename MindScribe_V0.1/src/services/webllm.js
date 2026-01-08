@@ -249,6 +249,17 @@ Instructions:
     }
   }
 
+  // Issue #13 fix: Missing cancelChat method
+  cancelChat() {
+    if (this.abortController) {
+      this.abortController.abort();
+      this.addDebugLog('warning', 'Chat request cancelled by user');
+      return true;
+    }
+    this.addDebugLog('info', 'No active chat to cancel');
+    return false;
+  }
+
   // --- RESTORED: ROBUST JOURNAL ANALYSIS ---
   
   async analyzeJournal(journalText) {
@@ -258,37 +269,70 @@ Instructions:
     this.addDebugLog('task', 'Analyzing journal entry...');
 
     try {
+      // Issue #14 fix: Enforce JSON structure with explicit schema
       const messages = [
         {
           role: 'system',
-          content: 'You are an expert psychological analyst. Output JSON only.'
+          content: 'You are a JSON-only API that analyzes journal entries. Output ONLY valid JSON, no other text.'
         },
         {
           role: 'user',
-          content: `Analyze this journal entry and provide structured assessment.
-Entry: "${journalText}"
-Provide:
-- Primary mood (one word)
-- Sentiment score (0-10)
-- Stress level (low/medium/high)
-- Brief summary (max 10 words)
-- Supportive insight`
+          content: `Analyze this journal entry and respond with ONLY valid JSON in this exact format (no additional text, no markdown):
+{
+  "emotion": "single_word_lowercase_emotion",
+  "sentiment": number_between_0_and_10,
+  "stress": "low_or_moderate_or_high",
+  "summary": "brief_summary_max_50_chars"
+}
+
+Journal Entry: "${journalText}"
+
+JSON Response:`
         }
       ];
 
+      // Issue #14 fix: Use stream: false and response_format for structured output
       const completion = await this.engine.chat.completions.create({
         messages,
         temperature: 0.4,
         max_tokens: 300,
+        stream: false, // CRITICAL: Must be false for non-streaming completion
+        response_format: { type: "json_object" } // WebLLM 0.2.x: Forces valid JSON output
       });
 
       const response = completion.choices[0].message.content.trim();
-      this.addDebugLog('info', 'Raw Analysis:', { response });
+      this.addDebugLog('info', 'Raw Analysis Response', { response });
       
-      // We use the restored parser to handle the LLM's non-perfect JSON output
-      const analysis = this.parseAnalysisResponse(response, journalText);
-      
-      return analysis;
+      // Issue #14 fix: Strict JSON parsing with validation, fallback to regex only on failure
+      try {
+        const analysis = JSON.parse(response);
+        
+        // Validate required fields
+        if (!analysis.emotion || typeof analysis.sentiment !== 'number' || !analysis.stress) {
+          throw new Error('Invalid JSON structure: missing required fields');
+        }
+        
+        // Validate data types and ranges
+        if (analysis.sentiment < 0 || analysis.sentiment > 10) {
+          throw new Error('Invalid sentiment value: must be 0-10');
+        }
+        
+        if (!['low', 'moderate', 'high'].includes(analysis.stress)) {
+          throw new Error('Invalid stress level: must be low, moderate, or high');
+        }
+        
+        // Add timestamp
+        analysis.analyzedAt = new Date().toISOString();
+        
+        this.addDebugLog('success', 'Journal analyzed successfully (JSON mode)');
+        return analysis;
+        
+      } catch (jsonError) {
+        // Fallback to regex parsing only if JSON parsing fails
+        this.addDebugLog('warning', `JSON parse failed: ${jsonError.message}, using regex fallback`);
+        const analysis = this.parseAnalysisResponse(response, journalText);
+        return analysis;
+      }
     } catch (error) {
       this.addDebugLog('error', `Analysis error: ${error.message}`);
       // Fallback object to prevent UI crash
@@ -306,32 +350,71 @@ Provide:
   }
 
   // --- RESTORED: COMPLEX PARSING LOGIC ---
+  // Issue #14 fix: Enhanced fallback parser with better pattern matching
+  // Only used when JSON parsing fails (backwards compatibility)
   parseAnalysisResponse(response, journalText) {
+    this.addDebugLog('info', 'Using regex fallback parser');
     const lowerResponse = response.toLowerCase();
     
-    // 1. Emotion Extraction (standardized field name)
+    // 1. Emotion Extraction - try multiple patterns
     let emotion = 'neutral';
-    const emotionPatterns = [/\bmood[:\s]+([a-z]+)/i, /\bemotion[:\s]+([a-z]+)/i];
+    const emotionPatterns = [
+      /\bemotio?n[:\s]+([a-z]+)/i,
+      /\bmood[:\s]+([a-z]+)/i,
+      /\bfeeling[:\s]+([a-z]+)/i,
+      /"emotion"\s*:\s*"([^"]+)"/i // JSON-like pattern
+    ];
     for (const pattern of emotionPatterns) {
       const match = response.match(pattern);
-      if (match && match[1]) { emotion = match[1].toLowerCase(); break; }
+      if (match && match[1]) { 
+        emotion = match[1].toLowerCase(); 
+        break; 
+      }
     }
 
-    // 2. Sentiment Extraction
+    // 2. Sentiment Extraction - try multiple formats
     let sentiment = 5;
-    const scoreMatch = response.match(/(\d+(?:\.\d+)?)\s*\/\s*10/);
-    if (scoreMatch) sentiment = parseFloat(scoreMatch[1]);
+    const sentimentPatterns = [
+      /sentiment[:\s]+(\d+(?:\.\d+)?)/i,
+      /(\d+(?:\.\d+)?)\s*\/\s*10/,
+      /"sentiment"\s*:\s*(\d+(?:\.\d+)?)/i // JSON-like pattern
+    ];
+    for (const pattern of sentimentPatterns) {
+      const match = response.match(pattern);
+      if (match) {
+        const value = parseFloat(match[1]);
+        if (value >= 0 && value <= 10) {
+          sentiment = value;
+          break;
+        }
+      }
+    }
 
-    // 3. Stress Level (standardized field name)
+    // 3. Stress Level Extraction - improved pattern matching
     let stress = 'moderate';
-    if (lowerResponse.includes('high stress')) stress = 'high';
-    else if (lowerResponse.includes('low stress')) stress = 'low';
-    else if (lowerResponse.includes('medium stress')) stress = 'moderate';
+    if (lowerResponse.includes('high stress') || lowerResponse.includes('stress: high')) {
+      stress = 'high';
+    } else if (lowerResponse.includes('low stress') || lowerResponse.includes('stress: low')) {
+      stress = 'low';
+    } else if (lowerResponse.includes('medium') || lowerResponse.includes('moderate')) {
+      stress = 'moderate';
+    }
 
-    // 4. Summary Extraction
-    let summary = journalText.substring(0, 60) + '...';
-    const summaryMatch = response.match(/summary[:\s]+(.+?)(?:\n|$)/i);
-    if (summaryMatch) summary = summaryMatch[1].trim();
+    // 4. Summary Extraction - try multiple patterns
+    let summary = journalText.substring(0, 50) + '...';
+    const summaryPatterns = [
+      /summary[:\s]+(.+?)(?:\n|$)/i,
+      /"summary"\s*:\s*"([^"]+)"/i // JSON-like pattern
+    ];
+    for (const pattern of summaryPatterns) {
+      const match = response.match(pattern);
+      if (match && match[1]) {
+        summary = match[1].trim().substring(0, 50);
+        break;
+      }
+    }
+
+    this.addDebugLog('info', 'Fallback parse result', { emotion, sentiment, stress, summary });
 
     return {
       emotion,
@@ -345,18 +428,31 @@ Provide:
   // --- RESTORED: RECOMMENDATIONS & REPORT ---
 
   async generateTherapyRecommendations(moodData) {
-    if (!this.engine) return "Take a deep breath and center yourself.";
+    if (!this.engine) throw new Error('Model not initialized');
     
     await this.waitForProcessing();
     this.isProcessing = true;
+    this.addDebugLog('task', 'Generating therapy recommendations...');
+    
     try {
         const messages = [
             { role: 'system', content: 'You are a helpful therapist.' },
             { role: 'user', content: `Suggest 3 short coping strategies for someone feeling ${moodData.avgSentiment < 5 ? 'stressed' : 'okay'}.` }
         ];
-        const completion = await this.engine.chat.completions.create({ messages, max_tokens: 200 });
-        return completion.choices[0].message.content;
+        
+        // Non-streaming completion (WebLLM API requires stream: false)
+        const completion = await this.engine.chat.completions.create({ 
+            messages, 
+            max_tokens: 200,
+            temperature: 0.7,
+            stream: false // CRITICAL: Must explicitly set to false for non-streaming
+        });
+        
+        const recommendations = completion.choices[0].message.content;
+        this.addDebugLog('success', 'Recommendations generated');
+        return recommendations;
     } catch(e) {
+        this.addDebugLog('error', `Recommendations failed: ${e.message}`);
         return "1. Practice deep breathing.\n2. Go for a short walk.\n3. Drink a glass of water.";
     } finally {
         this.isProcessing = false;
@@ -364,18 +460,35 @@ Provide:
   }
 
   async generateMentalHealthReport(userData) {
-     if (!this.engine) return "AI not loaded.";
+     if (!this.engine) throw new Error('Model not initialized');
+     
      await this.waitForProcessing();
      this.isProcessing = true;
+     this.addDebugLog('task', 'Generating mental health report...');
+     
      try {
          const messages = [
-             { role: 'system', content: 'Summarize mental health progress.' },
-             { role: 'user', content: `Summarize stats: ${userData.journalCount} entries, Mood ${userData.avgSentiment}/10.` }
+             { role: 'system', content: 'You are a compassionate mental health analyst. Provide a brief, encouraging summary.' },
+             { role: 'user', content: `Summarize this user's mental health progress: ${userData.journalCount} journal entries written, average mood sentiment ${userData.avgSentiment}/10. Provide 2-3 sentences of insight.` }
          ];
-         const completion = await this.engine.chat.completions.create({ messages, max_tokens: 300 });
-         return completion.choices[0].message.content;
-     } catch(e) { return "Unable to generate report."; } 
-     finally { this.isProcessing = false; }
+         
+         // Non-streaming completion (WebLLM API requires stream: false)
+         const completion = await this.engine.chat.completions.create({ 
+             messages, 
+             max_tokens: 300,
+             temperature: 0.7,
+             stream: false // CRITICAL: Must explicitly set to false for non-streaming
+         });
+         
+         const report = completion.choices[0].message.content;
+         this.addDebugLog('success', 'Report generated successfully');
+         return report;
+     } catch(e) {
+         this.addDebugLog('error', `Report generation failed: ${e.message}`);
+         return "Unable to generate report. Please try again.";
+     } finally { 
+         this.isProcessing = false; 
+     }
   }
 
   // --- CACHE MANAGEMENT ---

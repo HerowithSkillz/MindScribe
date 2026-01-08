@@ -122,7 +122,6 @@ const Chat = () => {
       // Always cleanup streaming state on error
       setStreamingMessage('');
       streamBufferRef.current = '';
-      lastUpdateTimeRef.current = 0;
       
       // Handle cancellation differently
       if (error.message === "Request cancelled") {
@@ -146,7 +145,6 @@ const Chat = () => {
       setIsLoading(false);
       setStreamingMessage('');
       streamBufferRef.current = '';
-      lastUpdateTimeRef.current = 0;
     }
   };
 
