@@ -15,7 +15,7 @@ export const useWebLLM = () => {
 export const WebLLMProvider = ({ children }) => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [progress, setProgress] = useState({ text: '', progress: 0 });
+  const [progress, setProgress] = useState({ text: '', progress: 0, timeElapsed: 0 });
   const [error, setError] = useState(null);
   const [availableModels, setAvailableModels] = useState([]);
   const [currentModel, setCurrentModel] = useState(null);
@@ -99,9 +99,11 @@ export const WebLLMProvider = ({ children }) => {
       }
 
       await webLLMService.initialize((progressReport) => {
+        // Enhanced progress reporting with stage detection
         setProgress({
           text: progressReport.text || 'Loading model...',
-          progress: progressReport.progress || 0
+          progress: progressReport.progress || 0,
+          timeElapsed: progressReport.timeElapsed || 0
         });
       });
 
