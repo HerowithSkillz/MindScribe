@@ -123,6 +123,16 @@ Instructions:
       if (!navigator.gpu) {
         throw new Error('WebGPU is not supported. Please use Chrome 113+ or Edge 113+');
       }
+      
+      // 0.1 Verify WebGPU Adapter (functional check)
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          throw new Error('WebGPU adapter unavailable. GPU may be disabled or blocked.');
+        }
+      } catch (adapterErr) {
+        throw new Error(`WebGPU initialization failed: ${adapterErr.message}`);
+      }
 
       // 1. Hardware Check (Silent)
       try {
@@ -398,11 +408,26 @@ Provide:
   }
 
   async purgeUnusedModels() {
-    const cachesList = await this.checkCache();
-    for (const cache of cachesList) {
-      if (!cache.name.includes(this.modelId)) {
-        await this.deleteModelFromCache(cache.name);
+    try {
+      this.addDebugLog('task', 'Purging unused model caches...');
+      const cachesList = await this.checkCache();
+      const unusedCaches = cachesList.filter(cache => !cache.name.includes(this.modelId));
+      
+      if (unusedCaches.length === 0) {
+        this.addDebugLog('info', 'No unused caches to purge');
+        return 0;
       }
+
+      // Delete all unused caches in parallel (Issue #11 fix)
+      await Promise.all(
+        unusedCaches.map(cache => this.deleteModelFromCache(cache.name))
+      );
+      
+      this.addDebugLog('success', `Purged ${unusedCaches.length} unused cache(s)`);
+      return unusedCaches.length;
+    } catch (err) {
+      this.addDebugLog('error', 'Failed to purge unused caches', err);
+      return 0;
     }
   }
 }
