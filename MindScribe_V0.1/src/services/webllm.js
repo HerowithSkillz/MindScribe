@@ -17,6 +17,7 @@ class WebLLMService {
     this.taskQueue = [];
     this.debugLogs = [];
     this.maxDebugLogs = 100;
+    this.hardwareTier = null; // Issue #15: Store hardware tier for reference
     
     // Default to the Lite model (Llama 3.2 1B) - matches WebLLM prebuilt config
     // Model IDs must exactly match those in: https://github.com/mlc-ai/web-llm/blob/main/src/config.ts
@@ -83,6 +84,12 @@ Instructions:
   clearDebugLogs() { this.debugLogs = []; this.addDebugLog('info', 'Debug logs cleared'); }
   getAvailableModels() { return this.availableModels; }
   getCurrentModel() { return this.modelId; }
+  getHardwareTier() { return this.hardwareTier; } // Issue #15: Expose hardware tier for UI display
+  
+  // Validate model ID exists in availableModels (prevents loading removed/invalid models)
+  isValidModelId(modelId) {
+    return this.availableModels.some(m => m.id === modelId);
+  }
 
   async waitForProcessing() {
     const maxWaitTime = 60000; // 60s timeout
@@ -101,6 +108,14 @@ Instructions:
   }
 
   async setModel(modelId) {
+    // Validate model ID exists in availableModels (prevents invalid models)
+    if (!this.isValidModelId(modelId)) {
+      const availableIds = this.availableModels.map(m => m.id).join(', ');
+      throw new Error(
+        `Invalid model ID: "${modelId}". Available models: ${availableIds}`
+      );
+    }
+    
     if (modelId === this.modelId) return;
     this.addDebugLog('task', `Switching model to ${modelId}...`);
     this.modelId = modelId;
@@ -134,11 +149,58 @@ Instructions:
         throw new Error(`WebGPU initialization failed: ${adapterErr.message}`);
       }
 
-      // 1. Hardware Check (Silent)
+      // 1. Hardware Check & Smart Model Selection (Issue #15 Enhancement)
       try {
          const hw = await getHardwareTier();
+         this.hardwareTier = hw.tier; // Store for reference
          this.addDebugLog('info', `Hardware Tier: ${hw.tier}`);
-      } catch (e) { console.warn('HW check skipped'); }
+         
+         // Issue #15 fix: Auto-select appropriate model on first launch
+         const storedModelId = localStorage.getItem('mindscribe_selected_model');
+         
+         if (!storedModelId) {
+           // First-time user - use hardware-recommended model
+           this.modelId = hw.recommendedModel || this.modelId;
+           this.addDebugLog('info', `Auto-selected model for ${hw.tier} tier hardware: ${this.modelId}`);
+         } else if (this.isValidModelId(storedModelId)) {
+           // Returning user with valid model preference
+           this.modelId = storedModelId;
+           this.addDebugLog('info', `Using user-selected model: ${this.modelId}`);
+         } else {
+           // Invalid/removed model in localStorage (e.g., Phi-3 from old version)
+           this.addDebugLog('warning', 
+             `⚠️ Model "${storedModelId}" is no longer available. Auto-selecting appropriate model for your hardware.`
+           );
+           localStorage.removeItem('mindscribe_selected_model'); // Clean up invalid entry
+           this.modelId = hw.recommendedModel || this.modelId;
+           this.addDebugLog('info', `Auto-selected model for ${hw.tier} tier hardware: ${this.modelId}`);
+         }
+         
+         // Issue #15 fix: Validate model vs hardware capability
+         const currentModel = this.availableModels.find(m => m.id === this.modelId);
+         if (currentModel) {
+           // Warn if 3B model on low/medium hardware
+           if ((hw.tier === 'low' || hw.tier === 'medium') && currentModel.id.includes('3B')) {
+             this.addDebugLog('warning', 
+               `⚠️ ${currentModel.name} (${currentModel.size}) may run slowly on ${hw.tier} tier hardware. ` +
+               `Consider switching to Llama 3.2 1B (~1.1GB) for better performance.`
+             );
+           }
+           
+           // Suggest better model for high-end hardware
+           if (hw.tier === 'high' && currentModel.id.includes('1B')) {
+             this.addDebugLog('info',
+               `💡 Your ${hw.tier} tier hardware can handle larger models. ` +
+               `Consider trying Llama 3.2 3B (~1.9GB) for improved response quality.`
+             );
+           }
+         }
+         
+      } catch (e) { 
+        console.warn('HW check skipped:', e); 
+        this.hardwareTier = 'unknown';
+        // Fallback to default model already set in constructor
+      }
 
       // 2. Worker Creation
       this.worker = new Worker(
