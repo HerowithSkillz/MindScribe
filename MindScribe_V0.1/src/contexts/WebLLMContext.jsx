@@ -180,10 +180,62 @@ export const WebLLMProvider = ({ children }) => {
     await initialize(true);
   }, [initialize]);
 
+  // Issue #19: Helper to manage preload preference
+  const setPreloadEnabled = useCallback((enabled) => {
+    localStorage.setItem('mindscribe_preload_model', enabled ? 'true' : 'false');
+    console.log(`[Preload] Preference updated: ${enabled ? 'enabled' : 'disabled'}`);
+  }, []);
+
+  const getPreloadEnabled = useCallback(() => {
+    const preloadEnabled = localStorage.getItem('mindscribe_preload_model');
+    return preloadEnabled === null || preloadEnabled === 'true';
+  }, []);
+
   // Register initialize function with AuthContext for auto-initialization on login
   useEffect(() => {
     setWebLLMInitialize(initialize);
   }, [initialize]);
+
+  // Issue #19: Intelligent Model Preloading Strategy
+  // Preload model in background after app initialization to reduce perceived latency
+  useEffect(() => {
+    // Check if preloading is enabled (default: true)
+    const preloadEnabled = localStorage.getItem('mindscribe_preload_model');
+    const shouldPreload = preloadEnabled === null || preloadEnabled === 'true';
+    
+    if (!shouldPreload) {
+      console.log('[Preload] Model preloading is disabled by user preference');
+      return;
+    }
+
+    // Only preload if model is not already initialized or loading
+    if (isInitialized || isLoading) {
+      return;
+    }
+
+    // Issue #19: Delay preloading to avoid competing with critical UI rendering
+    // According to best practices: Let the app fully render before heavy background tasks
+    const preloadDelay = 2500; // 2.5 seconds - enough time for auth + initial render
+    
+    const preloadTimer = setTimeout(() => {
+      console.log('[Preload] Starting background model initialization...');
+      
+      // Trigger initialization in background
+      // WebLLMContext's initialize() already has:
+      // - Progress tracking
+      // - Error handling with auto-retry
+      // - State management
+      initialize().catch(err => {
+        console.warn('[Preload] Background initialization failed:', err.message);
+        // Error is already handled by initialize() - no need to re-throw
+      });
+    }, preloadDelay);
+
+    // Cleanup timer on unmount or if conditions change
+    return () => {
+      clearTimeout(preloadTimer);
+    };
+  }, [isInitialized, isLoading, initialize]); // Re-evaluate when these change
 
   // CRITICAL FIX: Don't cleanup on unmount - WebLLMProvider should persist throughout app lifecycle
   // The provider wraps the entire app in App.jsx, so unmount = app closing
@@ -206,7 +258,10 @@ export const WebLLMProvider = ({ children }) => {
     generateRecommendations,
     generateReport,
     cancelChat,
-    retryInitialization
+    retryInitialization,
+    // Issue #19: Expose preload preference management
+    setPreloadEnabled,
+    getPreloadEnabled
   };
 
   return <WebLLMContext.Provider value={value}>{children}</WebLLMContext.Provider>;
