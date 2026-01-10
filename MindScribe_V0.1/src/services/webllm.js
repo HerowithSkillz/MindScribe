@@ -286,12 +286,15 @@ Instructions:
         max_tokens: 512, // Increased for better response completeness (was 350)
         repetition_penalty: 1.0, // Default value, prevents repetitive loops
         stream: true,
+        stream_options: { include_usage: true }, // Issue #18 fix: Enable usage statistics in stream
         // Stop tokens are handled automatically by WebLLM from model config
         // Llama 3.2 uses stop_token_ids: [128001, 128008, 128009] from conversation template
         // No custom stop strings needed - removes risk of premature stopping
       });
 
       let fullResponse = '';
+      let usageStats = null; // Issue #18: Capture usage statistics from final chunk
+      
       for await (const chunk of chunks) {
         if (this.abortController?.signal.aborted) {
           this.addDebugLog('warning', 'Chat cancelled');
@@ -300,8 +303,19 @@ Instructions:
         const content = chunk.choices[0]?.delta?.content || '';
         fullResponse += content;
         if (onUpdate) onUpdate(content);
+        
+        // Issue #18: According to WebLLM docs, usage is only in the last chunk
+        if (chunk.usage) {
+          usageStats = chunk.usage;
+          this.addDebugLog('info', `Token usage - Prompt: ${chunk.usage.prompt_tokens}, Completion: ${chunk.usage.completion_tokens}, Total: ${chunk.usage.total_tokens}`);
+        }
       }
-      return fullResponse;
+      
+      // Issue #18 fix: Return both response and usage statistics
+      return { 
+        content: fullResponse, 
+        usage: usageStats 
+      };
     } catch (error) {
       this.addDebugLog('error', `Chat error: ${error.message}`);
       throw error;
@@ -363,7 +377,12 @@ JSON Response:`
       });
 
       const response = completion.choices[0].message.content.trim();
+      const usageStats = completion.usage; // Issue #18: Capture usage statistics from non-streaming response
+      
       this.addDebugLog('info', 'Raw Analysis Response', { response });
+      if (usageStats) {
+        this.addDebugLog('info', `Analysis token usage - Prompt: ${usageStats.prompt_tokens}, Completion: ${usageStats.completion_tokens}, Total: ${usageStats.total_tokens}`);
+      }
       
       // Issue #14 fix: Strict JSON parsing with validation, fallback to regex only on failure
       try {
@@ -385,6 +404,7 @@ JSON Response:`
         
         // Add timestamp
         analysis.analyzedAt = new Date().toISOString();
+        analysis.usage = usageStats; // Issue #18: Include usage statistics in analysis result
         
         this.addDebugLog('success', 'Journal analyzed successfully (JSON mode)');
         return analysis;
