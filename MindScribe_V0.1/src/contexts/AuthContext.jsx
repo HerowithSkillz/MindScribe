@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import authService from '../services/auth';
 import { journalStorage, chatStorage, analysisStorage } from '../services/storage';
 import webLLMService from '../services/webllm';
+import { createError } from '../constants/errorMessages'; // Issue #20
 
 const AuthContext = createContext(null);
 
@@ -15,7 +16,7 @@ export const setWebLLMInitialize = (initFn) => {
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
+    throw createError('GENERAL', 'CONTEXT_ERROR'); // Issue #20: useAuth outside provider
   }
   return context;
 };

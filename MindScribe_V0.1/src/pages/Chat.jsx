@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { chatStorage } from '../services/storage';
 import voiceService from '../services/voice';
 import ModelSelector from '../components/ModelSelector';
+import { getErrorMessage } from '../constants/errorMessages'; // Issue #20
 
 const Chat = () => {
   const [messages, setMessages] = useState([]);
@@ -189,7 +190,8 @@ const Chat = () => {
 
   const handleVoiceInput = () => {
     if (!voiceService.isSupported()) {
-      alert('Voice input is not supported in your browser');
+      const error = getErrorMessage('VOICE', 'NOT_SUPPORTED'); // Issue #20
+      alert(error.user);
       return;
     }
 

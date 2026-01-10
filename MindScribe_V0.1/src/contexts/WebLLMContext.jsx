@@ -1,13 +1,14 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import webLLMService from '../services/webllm';
 import { setWebLLMInitialize } from './AuthContext';
+import { getErrorMessage, createError } from '../constants/errorMessages'; // Issue #20
 
 const WebLLMContext = createContext(null);
 
 export const useWebLLM = () => {
   const context = useContext(WebLLMContext);
   if (!context) {
-    throw new Error('useWebLLM must be used within WebLLMProvider');
+    throw createError('GENERAL', 'CONTEXT_ERROR'); // Issue #20: useWebLLM outside provider
   }
   return context;
 };
@@ -145,28 +146,28 @@ export const WebLLMProvider = ({ children }) => {
 
   const chat = useCallback(async (message, history = [], onStream = null) => {
     if (!isInitialized) {
-      throw new Error('Model not initialized. Please wait for initialization to complete.');
+      throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     }
     return await webLLMService.chat(message, history, onStream);
   }, [isInitialized]);
 
   const analyzeJournal = useCallback(async (journalText) => {
     if (!isInitialized) {
-      throw new Error('Model not initialized.');
+      throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     }
     return await webLLMService.analyzeJournal(journalText);
   }, [isInitialized]);
 
   const generateRecommendations = useCallback(async (moodData) => {
     if (!isInitialized) {
-      throw new Error('Model not initialized.');
+      throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     }
     return await webLLMService.generateTherapyRecommendations(moodData);
   }, [isInitialized]);
 
   const generateReport = useCallback(async (userData) => {
     if (!isInitialized) {
-      throw new Error('Model not initialized.');
+      throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     }
     return await webLLMService.generateMentalHealthReport(userData);
   }, [isInitialized]);

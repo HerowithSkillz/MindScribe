@@ -1,5 +1,6 @@
 import { CreateWebWorkerMLCEngine } from "@mlc-ai/web-llm";
 import { getHardwareTier } from '../utils/hardwareCheck';
+import { getErrorMessage, logError, createError } from '../constants/errorMessages';
 
 // ✅ FIXED: Use WebLLM's built-in prebuilt models instead of custom URLs
 // According to docs: https://webllm.mlc.ai/docs/user/basic_usage.html#model-records-in-webllm
@@ -102,8 +103,9 @@ Instructions:
     }
 
     if (this.isProcessing) {
-      this.addDebugLog('error', 'Task queue timeout');
-      throw new Error('AI is busy. Please try again.');
+      const error = getErrorMessage('MODEL', 'ALREADY_BUSY');
+      this.addDebugLog('error', error.dev);
+      throw createError('MODEL', 'ALREADY_BUSY');
     }
   }
 
@@ -136,17 +138,18 @@ Instructions:
     try {
       // 0. Check WebGPU Support (Issue #10 fix)
       if (!navigator.gpu) {
-        throw new Error('WebGPU is not supported. Please use Chrome 113+ or Edge 113+');
+        throw createError('BROWSER', 'WEBGPU_NOT_SUPPORTED');
       }
       
       // 0.1 Verify WebGPU Adapter (functional check)
       try {
         const adapter = await navigator.gpu.requestAdapter();
         if (!adapter) {
-          throw new Error('WebGPU adapter unavailable. GPU may be disabled or blocked.');
+          throw createError('BROWSER', 'WEBGPU_ADAPTER_UNAVAILABLE');
         }
       } catch (adapterErr) {
-        throw new Error(`WebGPU initialization failed: ${adapterErr.message}`);
+        const error = getErrorMessage('BROWSER', 'WEBGPU_INIT_FAILED');
+        throw new Error(`${error.user} (${adapterErr.message})`);
       }
 
       // 1. Hardware Check & Smart Model Selection (Issue #15 Enhancement)
@@ -266,7 +269,7 @@ Instructions:
   // --- CORE CHAT LOGIC ---
 
   async chat(userMessage, conversationHistory = [], onUpdate) {
-    if (!this.engine) throw new Error('Model not initialized');
+    if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     
     await this.waitForProcessing();
     this.isProcessing = true;
@@ -339,7 +342,7 @@ Instructions:
   // --- RESTORED: ROBUST JOURNAL ANALYSIS ---
   
   async analyzeJournal(journalText) {
-    if (!this.engine) throw new Error('Model not initialized');
+    if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     await this.waitForProcessing();
     this.isProcessing = true;
     this.addDebugLog('task', 'Analyzing journal entry...');
@@ -510,7 +513,7 @@ JSON Response:`
   // --- RESTORED: RECOMMENDATIONS & REPORT ---
 
   async generateTherapyRecommendations(moodData) {
-    if (!this.engine) throw new Error('Model not initialized');
+    if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     
     await this.waitForProcessing();
     this.isProcessing = true;
@@ -542,7 +545,7 @@ JSON Response:`
   }
 
   async generateMentalHealthReport(userData) {
-     if (!this.engine) throw new Error('Model not initialized');
+     if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
      
      await this.waitForProcessing();
      this.isProcessing = true;

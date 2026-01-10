@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import webLLMService from '../services/webllm';
 import { useWebLLM } from '../contexts/WebLLMContext';
+import { getErrorMessage } from '../constants/errorMessages'; // Issue #20
 
 const Debug = () => {
   const [logs, setLogs] = useState([]);
@@ -59,11 +60,10 @@ const Debug = () => {
   const handleClearCache = async () => {
     if (window.confirm('Clear all WebLLM model cache? This will force models to re-download. Use this if you\'re experiencing model loading issues.')) {
       const success = await webLLMService.clearAllCache();
-      if (success) {
-        alert('Cache cleared successfully! Please reload the page.');
-      } else {
-        alert('Failed to clear cache. Please try manually clearing browser data.');
-      }
+      const error = success
+        ? getErrorMessage('CACHE', 'CLEAR_SUCCESS')
+        : getErrorMessage('CACHE', 'CLEAR_FAILED'); // Issue #20
+      alert(error.user);
       loadLogs(); // Refresh to see cache clear log
     }
   };
