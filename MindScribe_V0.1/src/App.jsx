@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { WebLLMProvider } from './contexts/WebLLMContext';
@@ -34,12 +34,27 @@ const ProtectedRoute = ({ children }) => {
 // App Routes Component
 const AppRoutes = () => {
   const { isAuthenticated, hasCompletedDASS21, saveDASS21Results, user } = useAuth();
+  const [saveError, setSaveError] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const handleDASS21Complete = async (results) => {
-    const saved = await saveDASS21Results(results);
-    if (saved) {
-      // Navigation will happen automatically via hasCompletedDASS21 state change
-      console.log('DASS-21 completed successfully');
+    setSaving(true);
+    setSaveError(null);
+    
+    try {
+      const saved = await saveDASS21Results(results);
+      if (saved) {
+        // Navigation will happen automatically via hasCompletedDASS21 state change
+        console.log('DASS-21 completed successfully');
+      } else {
+        // saveDASS21Results returned false - save failed
+        setSaveError('Failed to save your assessment results. Please try again.');
+      }
+    } catch (error) {
+      console.error('Unexpected error saving DASS-21:', error);
+      setSaveError('An unexpected error occurred while saving. Please try again.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -53,6 +68,35 @@ const AppRoutes = () => {
         path="/assessment"
         element={
           <ProtectedRoute>
+            {saveError && (
+              <div className="fixed top-4 right-4 z-50 max-w-md">
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4 shadow-lg">
+                  <div className="flex items-start gap-3">
+                    <div className="text-2xl">⚠️</div>
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-red-800 mb-1">Save Failed</h3>
+                      <p className="text-sm text-red-700 mb-3">{saveError}</p>
+                      <button
+                        onClick={() => setSaveError(null)}
+                        className="text-sm font-medium text-red-800 hover:text-red-900 underline"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            {saving && (
+              <div className="fixed top-4 right-4 z-50">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 shadow-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="animate-spin text-2xl">⏳</div>
+                    <p className="text-sm text-blue-800 font-medium">Saving assessment...</p>
+                  </div>
+                </div>
+              </div>
+            )}
             <DASS21 onComplete={handleDASS21Complete} userName={user?.username} />
           </ProtectedRoute>
         }

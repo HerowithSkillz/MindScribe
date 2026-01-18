@@ -39,8 +39,14 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const checkDASS21Completion = async (username) => {
-    const assessment = await assessmentStorage.get(`dass21_${username}`);
-    setHasCompletedDASS21(!!assessment);
+    try {
+      const assessment = await assessmentStorage.get(`dass21_${username}`);
+      setHasCompletedDASS21(!!assessment);
+    } catch (error) {
+      console.error('Error checking DASS-21 completion status:', error);
+      // On error, assume not completed to allow retaking the assessment
+      setHasCompletedDASS21(false);
+    }
   };
 
   const login = async (username, password) => {
