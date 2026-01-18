@@ -1,5 +1,6 @@
 import { CreateWebWorkerMLCEngine } from "@mlc-ai/web-llm";
 import { getHardwareTier } from '../utils/hardwareCheck';
+import { getErrorMessage, logError, createError } from '../constants/errorMessages';
 
 // ✅ FIXED: Use WebLLM's built-in prebuilt models instead of custom URLs
 // According to docs: https://webllm.mlc.ai/docs/user/basic_usage.html#model-records-in-webllm
@@ -17,6 +18,7 @@ class WebLLMService {
     this.taskQueue = [];
     this.debugLogs = [];
     this.maxDebugLogs = 100;
+    this.hardwareTier = null; // Issue #15: Store hardware tier for reference
     
     // Default to the Lite model (Llama 3.2 1B) - matches WebLLM prebuilt config
     // Model IDs must exactly match those in: https://github.com/mlc-ai/web-llm/blob/main/src/config.ts
@@ -117,6 +119,12 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
   clearDebugLogs() { this.debugLogs = []; this.addDebugLog('info', 'Debug logs cleared'); }
   getAvailableModels() { return this.availableModels; }
   getCurrentModel() { return this.modelId; }
+  getHardwareTier() { return this.hardwareTier; } // Issue #15: Expose hardware tier for UI display
+  
+  // Validate model ID exists in availableModels (prevents loading removed/invalid models)
+  isValidModelId(modelId) {
+    return this.availableModels.some(m => m.id === modelId);
+  }
 
   async waitForProcessing() {
     const maxWaitTime = 60000; // 60s timeout
@@ -129,12 +137,21 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
     }
 
     if (this.isProcessing) {
-      this.addDebugLog('error', 'Task queue timeout');
-      throw new Error('AI is busy. Please try again.');
+      const error = getErrorMessage('MODEL', 'ALREADY_BUSY');
+      this.addDebugLog('error', error.dev);
+      throw createError('MODEL', 'ALREADY_BUSY');
     }
   }
 
   async setModel(modelId) {
+    // Validate model ID exists in availableModels (prevents invalid models)
+    if (!this.isValidModelId(modelId)) {
+      const availableIds = this.availableModels.map(m => m.id).join(', ');
+      throw new Error(
+        `Invalid model ID: "${modelId}". Available models: ${availableIds}`
+      );
+    }
+    
     if (modelId === this.modelId) return;
     this.addDebugLog('task', `Switching model to ${modelId}...`);
     this.modelId = modelId;
@@ -155,14 +172,72 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
     try {
       // 0. Check WebGPU Support (Issue #10 fix)
       if (!navigator.gpu) {
-        throw new Error('WebGPU is not supported. Please use Chrome 113+ or Edge 113+');
+        throw createError('BROWSER', 'WEBGPU_NOT_SUPPORTED');
+      }
+      
+      // 0.1 Verify WebGPU Adapter (functional check)
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          throw createError('BROWSER', 'WEBGPU_ADAPTER_UNAVAILABLE');
+        }
+      } catch (adapterErr) {
+        const error = getErrorMessage('BROWSER', 'WEBGPU_INIT_FAILED');
+        throw new Error(`${error.user} (${adapterErr.message})`);
       }
 
-      // 1. Hardware Check (Silent)
+      // 1. Hardware Check & Smart Model Selection (Issue #15 Enhancement)
       try {
          const hw = await getHardwareTier();
+         this.hardwareTier = hw.tier; // Store for reference
          this.addDebugLog('info', `Hardware Tier: ${hw.tier}`);
-      } catch (e) { console.warn('HW check skipped'); }
+         
+         // Issue #15 fix: Auto-select appropriate model on first launch
+         const storedModelId = localStorage.getItem('mindscribe_selected_model');
+         
+         if (!storedModelId) {
+           // First-time user - use hardware-recommended model
+           this.modelId = hw.recommendedModel || this.modelId;
+           this.addDebugLog('info', `Auto-selected model for ${hw.tier} tier hardware: ${this.modelId}`);
+         } else if (this.isValidModelId(storedModelId)) {
+           // Returning user with valid model preference
+           this.modelId = storedModelId;
+           this.addDebugLog('info', `Using user-selected model: ${this.modelId}`);
+         } else {
+           // Invalid/removed model in localStorage (e.g., Phi-3 from old version)
+           this.addDebugLog('warning', 
+             `⚠️ Model "${storedModelId}" is no longer available. Auto-selecting appropriate model for your hardware.`
+           );
+           localStorage.removeItem('mindscribe_selected_model'); // Clean up invalid entry
+           this.modelId = hw.recommendedModel || this.modelId;
+           this.addDebugLog('info', `Auto-selected model for ${hw.tier} tier hardware: ${this.modelId}`);
+         }
+         
+         // Issue #15 fix: Validate model vs hardware capability
+         const currentModel = this.availableModels.find(m => m.id === this.modelId);
+         if (currentModel) {
+           // Warn if 3B model on low/medium hardware
+           if ((hw.tier === 'low' || hw.tier === 'medium') && currentModel.id.includes('3B')) {
+             this.addDebugLog('warning', 
+               `⚠️ ${currentModel.name} (${currentModel.size}) may run slowly on ${hw.tier} tier hardware. ` +
+               `Consider switching to Llama 3.2 1B (~1.1GB) for better performance.`
+             );
+           }
+           
+           // Suggest better model for high-end hardware
+           if (hw.tier === 'high' && currentModel.id.includes('1B')) {
+             this.addDebugLog('info',
+               `💡 Your ${hw.tier} tier hardware can handle larger models. ` +
+               `Consider trying Llama 3.2 3B (~1.9GB) for improved response quality.`
+             );
+           }
+         }
+         
+      } catch (e) { 
+        console.warn('HW check skipped:', e); 
+        this.hardwareTier = 'unknown';
+        // Fallback to default model already set in constructor
+      }
 
       // 2. Worker Creation
       this.worker = new Worker(
@@ -228,7 +303,7 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
   // --- CORE CHAT LOGIC ---
 
   async chat(userMessage, conversationHistory = [], onUpdate) {
-    if (!this.engine) throw new Error('Model not initialized');
+    if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     
     await this.waitForProcessing();
     this.isProcessing = true;
@@ -248,12 +323,15 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
         max_tokens: 512, // Increased for better response completeness (was 350)
         repetition_penalty: 1.0, // Default value, prevents repetitive loops
         stream: true,
+        stream_options: { include_usage: true }, // Issue #18 fix: Enable usage statistics in stream
         // Stop tokens are handled automatically by WebLLM from model config
         // Llama 3.2 uses stop_token_ids: [128001, 128008, 128009] from conversation template
         // No custom stop strings needed - removes risk of premature stopping
       });
 
       let fullResponse = '';
+      let usageStats = null; // Issue #18: Capture usage statistics from final chunk
+      
       for await (const chunk of chunks) {
         if (this.abortController?.signal.aborted) {
           this.addDebugLog('warning', 'Chat cancelled');
@@ -262,8 +340,19 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
         const content = chunk.choices[0]?.delta?.content || '';
         fullResponse += content;
         if (onUpdate) onUpdate(content);
+        
+        // Issue #18: According to WebLLM docs, usage is only in the last chunk
+        if (chunk.usage) {
+          usageStats = chunk.usage;
+          this.addDebugLog('info', `Token usage - Prompt: ${chunk.usage.prompt_tokens}, Completion: ${chunk.usage.completion_tokens}, Total: ${chunk.usage.total_tokens}`);
+        }
       }
-      return fullResponse;
+      
+      // Issue #18 fix: Return both response and usage statistics
+      return { 
+        content: fullResponse, 
+        usage: usageStats 
+      };
     } catch (error) {
       this.addDebugLog('error', `Chat error: ${error.message}`);
       throw error;
@@ -273,46 +362,96 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
     }
   }
 
+  // Issue #13 fix: Missing cancelChat method
+  cancelChat() {
+    if (this.abortController) {
+      this.abortController.abort();
+      this.addDebugLog('warning', 'Chat request cancelled by user');
+      return true;
+    }
+    this.addDebugLog('info', 'No active chat to cancel');
+    return false;
+  }
+
   // --- RESTORED: ROBUST JOURNAL ANALYSIS ---
   
   async analyzeJournal(journalText) {
-    if (!this.engine) throw new Error('Model not initialized');
+    if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     await this.waitForProcessing();
     this.isProcessing = true;
     this.addDebugLog('task', 'Analyzing journal entry...');
 
     try {
+      // Issue #14 fix: Enforce JSON structure with explicit schema
       const messages = [
         {
           role: 'system',
-          content: 'You are an expert psychological analyst. Output JSON only.'
+          content: 'You are a JSON-only API that analyzes journal entries. Output ONLY valid JSON, no other text.'
         },
         {
           role: 'user',
-          content: `Analyze this journal entry and provide structured assessment.
-Entry: "${journalText}"
-Provide:
-- Primary mood (one word)
-- Sentiment score (0-10)
-- Stress level (low/medium/high)
-- Brief summary (max 10 words)
-- Supportive insight`
+          content: `Analyze this journal entry and respond with ONLY valid JSON in this exact format (no additional text, no markdown):
+{
+  "emotion": "single_word_lowercase_emotion",
+  "sentiment": number_between_0_and_10,
+  "stress": "low_or_moderate_or_high",
+  "summary": "brief_summary_max_50_chars"
+}
+
+Journal Entry: "${journalText}"
+
+JSON Response:`
         }
       ];
 
+      // Issue #14 fix: Use stream: false and response_format for structured output
       const completion = await this.engine.chat.completions.create({
         messages,
         temperature: 0.4,
         max_tokens: 300,
+        stream: false, // CRITICAL: Must be false for non-streaming completion
+        response_format: { type: "json_object" } // WebLLM 0.2.x: Forces valid JSON output
       });
 
       const response = completion.choices[0].message.content.trim();
-      this.addDebugLog('info', 'Raw Analysis:', { response });
+      const usageStats = completion.usage; // Issue #18: Capture usage statistics from non-streaming response
       
-      // We use the restored parser to handle the LLM's non-perfect JSON output
-      const analysis = this.parseAnalysisResponse(response, journalText);
+      this.addDebugLog('info', 'Raw Analysis Response', { response });
+      if (usageStats) {
+        this.addDebugLog('info', `Analysis token usage - Prompt: ${usageStats.prompt_tokens}, Completion: ${usageStats.completion_tokens}, Total: ${usageStats.total_tokens}`);
+      }
       
-      return analysis;
+      // Issue #14 fix: Strict JSON parsing with validation, fallback to regex only on failure
+      try {
+        const analysis = JSON.parse(response);
+        
+        // Validate required fields
+        if (!analysis.emotion || typeof analysis.sentiment !== 'number' || !analysis.stress) {
+          throw new Error('Invalid JSON structure: missing required fields');
+        }
+        
+        // Validate data types and ranges
+        if (analysis.sentiment < 0 || analysis.sentiment > 10) {
+          throw new Error('Invalid sentiment value: must be 0-10');
+        }
+        
+        if (!['low', 'moderate', 'high'].includes(analysis.stress)) {
+          throw new Error('Invalid stress level: must be low, moderate, or high');
+        }
+        
+        // Add timestamp
+        analysis.analyzedAt = new Date().toISOString();
+        analysis.usage = usageStats; // Issue #18: Include usage statistics in analysis result
+        
+        this.addDebugLog('success', 'Journal analyzed successfully (JSON mode)');
+        return analysis;
+        
+      } catch (jsonError) {
+        // Fallback to regex parsing only if JSON parsing fails
+        this.addDebugLog('warning', `JSON parse failed: ${jsonError.message}, using regex fallback`);
+        const analysis = this.parseAnalysisResponse(response, journalText);
+        return analysis;
+      }
     } catch (error) {
       this.addDebugLog('error', `Analysis error: ${error.message}`);
       // Fallback object to prevent UI crash
@@ -330,32 +469,71 @@ Provide:
   }
 
   // --- RESTORED: COMPLEX PARSING LOGIC ---
+  // Issue #14 fix: Enhanced fallback parser with better pattern matching
+  // Only used when JSON parsing fails (backwards compatibility)
   parseAnalysisResponse(response, journalText) {
+    this.addDebugLog('info', 'Using regex fallback parser');
     const lowerResponse = response.toLowerCase();
     
-    // 1. Emotion Extraction (standardized field name)
+    // 1. Emotion Extraction - try multiple patterns
     let emotion = 'neutral';
-    const emotionPatterns = [/\bmood[:\s]+([a-z]+)/i, /\bemotion[:\s]+([a-z]+)/i];
+    const emotionPatterns = [
+      /\bemotio?n[:\s]+([a-z]+)/i,
+      /\bmood[:\s]+([a-z]+)/i,
+      /\bfeeling[:\s]+([a-z]+)/i,
+      /"emotion"\s*:\s*"([^"]+)"/i // JSON-like pattern
+    ];
     for (const pattern of emotionPatterns) {
       const match = response.match(pattern);
-      if (match && match[1]) { emotion = match[1].toLowerCase(); break; }
+      if (match && match[1]) { 
+        emotion = match[1].toLowerCase(); 
+        break; 
+      }
     }
 
-    // 2. Sentiment Extraction
+    // 2. Sentiment Extraction - try multiple formats
     let sentiment = 5;
-    const scoreMatch = response.match(/(\d+(?:\.\d+)?)\s*\/\s*10/);
-    if (scoreMatch) sentiment = parseFloat(scoreMatch[1]);
+    const sentimentPatterns = [
+      /sentiment[:\s]+(\d+(?:\.\d+)?)/i,
+      /(\d+(?:\.\d+)?)\s*\/\s*10/,
+      /"sentiment"\s*:\s*(\d+(?:\.\d+)?)/i // JSON-like pattern
+    ];
+    for (const pattern of sentimentPatterns) {
+      const match = response.match(pattern);
+      if (match) {
+        const value = parseFloat(match[1]);
+        if (value >= 0 && value <= 10) {
+          sentiment = value;
+          break;
+        }
+      }
+    }
 
-    // 3. Stress Level (standardized field name)
+    // 3. Stress Level Extraction - improved pattern matching
     let stress = 'moderate';
-    if (lowerResponse.includes('high stress')) stress = 'high';
-    else if (lowerResponse.includes('low stress')) stress = 'low';
-    else if (lowerResponse.includes('medium stress')) stress = 'moderate';
+    if (lowerResponse.includes('high stress') || lowerResponse.includes('stress: high')) {
+      stress = 'high';
+    } else if (lowerResponse.includes('low stress') || lowerResponse.includes('stress: low')) {
+      stress = 'low';
+    } else if (lowerResponse.includes('medium') || lowerResponse.includes('moderate')) {
+      stress = 'moderate';
+    }
 
-    // 4. Summary Extraction
-    let summary = journalText.substring(0, 60) + '...';
-    const summaryMatch = response.match(/summary[:\s]+(.+?)(?:\n|$)/i);
-    if (summaryMatch) summary = summaryMatch[1].trim();
+    // 4. Summary Extraction - try multiple patterns
+    let summary = journalText.substring(0, 50) + '...';
+    const summaryPatterns = [
+      /summary[:\s]+(.+?)(?:\n|$)/i,
+      /"summary"\s*:\s*"([^"]+)"/i // JSON-like pattern
+    ];
+    for (const pattern of summaryPatterns) {
+      const match = response.match(pattern);
+      if (match && match[1]) {
+        summary = match[1].trim().substring(0, 50);
+        break;
+      }
+    }
+
+    this.addDebugLog('info', 'Fallback parse result', { emotion, sentiment, stress, summary });
 
     return {
       emotion,
@@ -369,18 +547,31 @@ Provide:
   // --- RESTORED: RECOMMENDATIONS & REPORT ---
 
   async generateTherapyRecommendations(moodData) {
-    if (!this.engine) return "Take a deep breath and center yourself.";
+    if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     
     await this.waitForProcessing();
     this.isProcessing = true;
+    this.addDebugLog('task', 'Generating therapy recommendations...');
+    
     try {
         const messages = [
             { role: 'system', content: 'You are a helpful therapist.' },
             { role: 'user', content: `Suggest 3 short coping strategies for someone feeling ${moodData.avgSentiment < 5 ? 'stressed' : 'okay'}.` }
         ];
-        const completion = await this.engine.chat.completions.create({ messages, max_tokens: 200 });
-        return completion.choices[0].message.content;
+        
+        // Non-streaming completion (WebLLM API requires stream: false)
+        const completion = await this.engine.chat.completions.create({ 
+            messages, 
+            max_tokens: 200,
+            temperature: 0.7,
+            stream: false // CRITICAL: Must explicitly set to false for non-streaming
+        });
+        
+        const recommendations = completion.choices[0].message.content;
+        this.addDebugLog('success', 'Recommendations generated');
+        return recommendations;
     } catch(e) {
+        this.addDebugLog('error', `Recommendations failed: ${e.message}`);
         return "1. Practice deep breathing.\n2. Go for a short walk.\n3. Drink a glass of water.";
     } finally {
         this.isProcessing = false;
@@ -388,18 +579,35 @@ Provide:
   }
 
   async generateMentalHealthReport(userData) {
-     if (!this.engine) return "AI not loaded.";
+     if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
+     
      await this.waitForProcessing();
      this.isProcessing = true;
+     this.addDebugLog('task', 'Generating mental health report...');
+     
      try {
          const messages = [
-             { role: 'system', content: 'Summarize mental health progress.' },
-             { role: 'user', content: `Summarize stats: ${userData.journalCount} entries, Mood ${userData.avgSentiment}/10.` }
+             { role: 'system', content: 'You are a compassionate mental health analyst. Provide a brief, encouraging summary.' },
+             { role: 'user', content: `Summarize this user's mental health progress: ${userData.journalCount} journal entries written, average mood sentiment ${userData.avgSentiment}/10. Provide 2-3 sentences of insight.` }
          ];
-         const completion = await this.engine.chat.completions.create({ messages, max_tokens: 300 });
-         return completion.choices[0].message.content;
-     } catch(e) { return "Unable to generate report."; } 
-     finally { this.isProcessing = false; }
+         
+         // Non-streaming completion (WebLLM API requires stream: false)
+         const completion = await this.engine.chat.completions.create({ 
+             messages, 
+             max_tokens: 300,
+             temperature: 0.7,
+             stream: false // CRITICAL: Must explicitly set to false for non-streaming
+         });
+         
+         const report = completion.choices[0].message.content;
+         this.addDebugLog('success', 'Report generated successfully');
+         return report;
+     } catch(e) {
+         this.addDebugLog('error', `Report generation failed: ${e.message}`);
+         return "Unable to generate report. Please try again.";
+     } finally { 
+         this.isProcessing = false; 
+     }
   }
 
   // --- CACHE MANAGEMENT ---
@@ -432,11 +640,26 @@ Provide:
   }
 
   async purgeUnusedModels() {
-    const cachesList = await this.checkCache();
-    for (const cache of cachesList) {
-      if (!cache.name.includes(this.modelId)) {
-        await this.deleteModelFromCache(cache.name);
+    try {
+      this.addDebugLog('task', 'Purging unused model caches...');
+      const cachesList = await this.checkCache();
+      const unusedCaches = cachesList.filter(cache => !cache.name.includes(this.modelId));
+      
+      if (unusedCaches.length === 0) {
+        this.addDebugLog('info', 'No unused caches to purge');
+        return 0;
       }
+
+      // Delete all unused caches in parallel (Issue #11 fix)
+      await Promise.all(
+        unusedCaches.map(cache => this.deleteModelFromCache(cache.name))
+      );
+      
+      this.addDebugLog('success', `Purged ${unusedCaches.length} unused cache(s)`);
+      return unusedCaches.length;
+    } catch (err) {
+      this.addDebugLog('error', 'Failed to purge unused caches', err);
+      return 0;
     }
   }
 }

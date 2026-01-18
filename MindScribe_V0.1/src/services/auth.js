@@ -1,4 +1,5 @@
 import { userStorage } from './storage';
+import { getErrorMessage, createError } from '../constants/errorMessages'; // Issue #20
 
 class AuthService {
   constructor() {
@@ -10,7 +11,7 @@ class AuthService {
       // Check if user already exists
       const existingUser = await userStorage.get(`user_${username}`);
       if (existingUser) {
-        throw new Error('Username already exists');
+        throw createError('AUTH', 'USERNAME_EXISTS'); // Issue #20
       }
 
       // Generate unique salt for this user (CRITICAL SECURITY FIX)
@@ -69,7 +70,7 @@ class AuthService {
       const user = await userStorage.get(`user_${username}`);
       
       if (!user) {
-        throw new Error('Invalid username or password');
+        throw createError('AUTH', 'INVALID_CREDENTIALS'); // Issue #20
       }
 
       // Verify password with salt
@@ -163,7 +164,7 @@ class AuthService {
       const user = await userStorage.get(`user_${username}`);
       
       if (!user) {
-        throw new Error('User not found');
+        throw createError('AUTH', 'USER_NOT_FOUND'); // Issue #20
       }
 
       const oldHash = await this.hashPassword(oldPassword, userSalt);

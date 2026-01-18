@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../contexts/AuthContext';
+import { getErrorMessage } from '../constants/errorMessages'; // Issue #20
 
 const Login = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -55,7 +56,8 @@ const Login = () => {
         }
       }
     } catch (err) {
-      setError('An unexpected error occurred');
+      const error = getErrorMessage('GENERAL', 'UNEXPECTED_ERROR'); // Issue #20
+      setError(error.user);
       console.error(err);
     } finally {
       setLoading(false);
