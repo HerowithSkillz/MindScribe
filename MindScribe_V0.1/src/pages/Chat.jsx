@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import { useWebLLM } from '../contexts/WebLLMContext';
 import { useAuth } from '../contexts/AuthContext';
 import { chatStorage } from '../services/storage';
 import voiceService from '../services/voice';
+import webLLMService from '../services/webllm';
 import ModelSelector from '../components/ModelSelector';
 
 const Chat = () => {
@@ -15,15 +17,27 @@ const Chat = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [showAssessmentPrompt, setShowAssessmentPrompt] = useState(false);
   
   const messagesEndRef = useRef(null);
   const streamBufferRef = useRef('');
   const { chat, cancelChat, isInitialized, isLoading: modelLoading, initialize, progress, currentModel } = useWebLLM();
-  const { user } = useAuth();
+  const { user, getDASS21Results, hasCompletedDASS21 } = useAuth();
 
   useEffect(() => {
     loadChatHistory();
+    loadDassBaseline();
   }, []);
+
+  const loadDassBaseline = async () => {
+    const dassResults = await getDASS21Results();
+    if (dassResults) {
+      webLLMService.setDassBaseline(dassResults);
+    } else {
+      // Show prompt if user hasn't taken assessment
+      setShowAssessmentPrompt(true);
+    }
+  };
 
   useEffect(() => {
     // Initialize model if not already initialized
@@ -268,6 +282,42 @@ const Chat = () => {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto py-4 space-y-4 min-h-0 max-h-[calc(100vh-400px)]">
+          {/* Assessment Prompt Banner */}
+          {showAssessmentPrompt && !hasCompletedDASS21 && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-gradient-to-r from-purple-50 to-blue-50 border-2 border-purple-200 rounded-lg p-4 mb-4"
+            >
+              <div className="flex items-start gap-3">
+                <div className="text-3xl">💡</div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-purple-900 mb-1">
+                    Help us understand you better
+                  </h3>
+                  <p className="text-sm text-purple-800 mb-3">
+                    Taking the DASS-21 assessment helps MindScribe provide more personalized 
+                    support tailored to your needs. It only takes 5-10 minutes.
+                  </p>
+                  <div className="flex gap-2">
+                    <Link
+                      to="/assessment"
+                      className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition-colors"
+                    >
+                      Take Assessment
+                    </Link>
+                    <button
+                      onClick={() => setShowAssessmentPrompt(false)}
+                      className="px-4 py-2 bg-white border border-purple-300 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-50 transition-colors"
+                    >
+                      Maybe Later
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
           {messages.length === 0 && (
             <motion.div
               initial={{ opacity: 0 }}

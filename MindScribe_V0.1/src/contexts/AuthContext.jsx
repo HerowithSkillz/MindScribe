@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import authService from '../services/auth';
-import { journalStorage, chatStorage, analysisStorage } from '../services/storage';
+import { userStorage, journalStorage, chatStorage, analysisStorage, assessmentStorage } from '../services/storage';
 import webLLMService from '../services/webllm';
 
 const AuthContext = createContext(null);
@@ -23,13 +23,25 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [hasCompletedDASS21, setHasCompletedDASS21] = useState(false);
 
   useEffect(() => {
     // Check for existing session
     const currentUser = authService.getCurrentUser();
     setUser(currentUser);
+    
+    // Check if user has completed DASS-21
+    if (currentUser) {
+      checkDASS21Completion(currentUser.username);
+    }
+    
     setLoading(false);
   }, []);
+
+  const checkDASS21Completion = async (username) => {
+    const assessment = await assessmentStorage.get(`dass21_${username}`);
+    setHasCompletedDASS21(!!assessment);
+  };
 
   const login = async (username, password) => {
     const result = await authService.login(username, password);
@@ -69,6 +81,9 @@ export const AuthProvider = ({ children }) => {
       await journalStorage.setEncryptionKey(password, userSalt);
       await chatStorage.setEncryptionKey(password, userSalt);
       await analysisStorage.setEncryptionKey(password, userSalt);
+      await assessmentStorage.setEncryptionKey(password, userSalt);
+      
+      // DASS-21 will be completed after registration (hasCompletedDASS21 remains false)
       
       // Initialize AI model immediately (no delay)
       if (webLLMInitialize) {
@@ -92,11 +107,31 @@ export const AuthProvider = ({ children }) => {
     
     authService.logout();
     setUser(null);
+    setHasCompletedDASS21(false);
     
     // Clear encryption keys
     journalStorage.encryptionKey = null;
     chatStorage.encryptionKey = null;
     analysisStorage.encryptionKey = null;
+    assessmentStorage.encryptionKey = null;
+  };
+
+  const saveDASS21Results = async (results) => {
+    if (!user) return false;
+    
+    try {
+      await assessmentStorage.save(`dass21_${user.username}`, results);
+      setHasCompletedDASS21(true);
+      return true;
+    } catch (error) {
+      console.error('Error saving DASS-21 results:', error);
+      return false;
+    }
+  };
+
+  const getDASS21Results = async () => {
+    if (!user) return null;
+    return await assessmentStorage.get(`dass21_${user.username}`);
   };
 
   const value = {
@@ -105,7 +140,10 @@ export const AuthProvider = ({ children }) => {
     register,
     logout,
     isAuthenticated: !!user,
-    loading
+    loading,
+    hasCompletedDASS21,
+    saveDASS21Results,
+    getDASS21Results
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

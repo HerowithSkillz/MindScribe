@@ -26,6 +26,11 @@ const analysisStore = localforage.createInstance({
   storeName: 'analysis'
 });
 
+const assessmentStore = localforage.createInstance({
+  name: 'mindscribe',
+  storeName: 'assessments'
+});
+
 // Encryption utilities using Web Crypto API
 class CryptoService {
   // Generate unique salt for new users
@@ -194,6 +199,7 @@ export const journalStorage = new StorageService(journalStore, true);
 export const chatStorage = new StorageService(chatStore, true);
 export const settingsStorage = new StorageService(settingsStore, false);
 export const analysisStorage = new StorageService(analysisStore, true);
+export const assessmentStorage = new StorageService(assessmentStore, true);
 
 // Export CryptoService for salt generation in auth
 export { CryptoService };

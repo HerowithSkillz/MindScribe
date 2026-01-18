@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { WebLLMProvider } from './contexts/WebLLMContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/Login';
+import DASS21 from './components/DASS21';
 import Layout from './components/Layout';
 import ModelInitializationModal from './components/ModelInitializationModal';
 import Chat from './pages/Chat';
@@ -12,7 +13,7 @@ import Dashboard from './pages/Dashboard';
 import Report from './pages/Report';
 import Debug from './pages/Debug';
 
-// Protected Route Component
+// Protected Route Component - requires authentication
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
 
@@ -32,13 +33,29 @@ const ProtectedRoute = ({ children }) => {
 
 // App Routes Component
 const AppRoutes = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, hasCompletedDASS21, saveDASS21Results, user } = useAuth();
+
+  const handleDASS21Complete = async (results) => {
+    const saved = await saveDASS21Results(results);
+    if (saved) {
+      // Navigation will happen automatically via hasCompletedDASS21 state change
+      console.log('DASS-21 completed successfully');
+    }
+  };
 
   return (
     <Routes>
       <Route
         path="/login"
         element={isAuthenticated ? <Navigate to="/chat" replace /> : <Login />}
+      />
+      <Route
+        path="/assessment"
+        element={
+          <ProtectedRoute>
+            <DASS21 onComplete={handleDASS21Complete} userName={user?.username} />
+          </ProtectedRoute>
+        }
       />
       <Route
         path="/chat"

@@ -2,18 +2,25 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
-import { analysisStorage } from '../services/storage';
+import { analysisStorage, assessmentStorage } from '../services/storage';
 
 const Dashboard = () => {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState(30); // days
+  const [dassResults, setDassResults] = useState(null);
   
-  const { user } = useAuth();
+  const { user, getDASS21Results } = useAuth();
 
   useEffect(() => {
     loadStats();
+    loadDassResults();
   }, [timeRange]);
+
+  const loadDassResults = async () => {
+    const results = await getDASS21Results();
+    setDassResults(results);
+  };
 
   const loadStats = async () => {
     setLoading(true);
@@ -207,6 +214,85 @@ const Dashboard = () => {
           <option value={365}>Last year</option>
         </select>
       </div>
+
+      {/* DASS-21 Baseline Assessment */}
+      {dassResults && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="card bg-gradient-to-r from-blue-50 to-purple-50"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-display font-bold text-calm-600">
+              📋 DASS-21 Baseline Assessment
+            </h3>
+            <span className="text-sm text-gray-600">
+              Completed: {new Date(dassResults.completedAt).toLocaleDateString()}
+            </span>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Depression */}
+            <div className="bg-white rounded-lg p-4 border-2 border-blue-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-semibold text-blue-800">Depression</span>
+                <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                  dassResults.severityLevels.depression.color === 'green' ? 'bg-green-100 text-green-800' :
+                  dassResults.severityLevels.depression.color === 'blue' ? 'bg-blue-100 text-blue-800' :
+                  dassResults.severityLevels.depression.color === 'yellow' ? 'bg-yellow-100 text-yellow-800' :
+                  dassResults.severityLevels.depression.color === 'orange' ? 'bg-orange-100 text-orange-800' :
+                  'bg-red-100 text-red-800'
+                }`}>
+                  {dassResults.severityLevels.depression.level}
+                </span>
+              </div>
+              <div className="text-3xl font-bold text-blue-600">{dassResults.scores.depression}</div>
+              <div className="text-xs text-gray-500 mt-1">Score range: 0-42</div>
+            </div>
+
+            {/* Anxiety */}
+            <div className="bg-white rounded-lg p-4 border-2 border-amber-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-semibold text-amber-800">Anxiety</span>
+                <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                  dassResults.severityLevels.anxiety.color === 'green' ? 'bg-green-100 text-green-800' :
+                  dassResults.severityLevels.anxiety.color === 'blue' ? 'bg-blue-100 text-blue-800' :
+                  dassResults.severityLevels.anxiety.color === 'yellow' ? 'bg-yellow-100 text-yellow-800' :
+                  dassResults.severityLevels.anxiety.color === 'orange' ? 'bg-orange-100 text-orange-800' :
+                  'bg-red-100 text-red-800'
+                }`}>
+                  {dassResults.severityLevels.anxiety.level}
+                </span>
+              </div>
+              <div className="text-3xl font-bold text-amber-600">{dassResults.scores.anxiety}</div>
+              <div className="text-xs text-gray-500 mt-1">Score range: 0-42</div>
+            </div>
+
+            {/* Stress */}
+            <div className="bg-white rounded-lg p-4 border-2 border-rose-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-semibold text-rose-800">Stress</span>
+                <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                  dassResults.severityLevels.stress.color === 'green' ? 'bg-green-100 text-green-800' :
+                  dassResults.severityLevels.stress.color === 'blue' ? 'bg-blue-100 text-blue-800' :
+                  dassResults.severityLevels.stress.color === 'yellow' ? 'bg-yellow-100 text-yellow-800' :
+                  dassResults.severityLevels.stress.color === 'orange' ? 'bg-orange-100 text-orange-800' :
+                  'bg-red-100 text-red-800'
+                }`}>
+                  {dassResults.severityLevels.stress.level}
+                </span>
+              </div>
+              <div className="text-3xl font-bold text-rose-600">{dassResults.scores.stress}</div>
+              <div className="text-xs text-gray-500 mt-1">Score range: 0-42</div>
+            </div>
+          </div>
+
+          <div className="mt-4 p-3 bg-blue-100 rounded-lg text-sm text-blue-800">
+            <strong>Note:</strong> This baseline assessment helps MindScribe provide personalized support tailored to your needs. 
+            Your responses are private and stored securely on your device.
+          </div>
+        </motion.div>
+      )}
 
       {/* Summary Cards - FR-008 */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
