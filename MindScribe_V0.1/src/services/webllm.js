@@ -52,6 +52,40 @@ Instructions:
 - Be empathetic but concise.
 - Stop speaking immediately after your turn.
 - Do NOT generate text for the User.`;
+    
+    this.dassBaseline = null; // Store DASS-21 baseline for context
+  }
+
+  // Set DASS-21 baseline assessment results
+  setDassBaseline(dassResults) {
+    this.dassBaseline = dassResults;
+    this.updateSystemPrompt();
+  }
+
+  // Update system prompt with DASS-21 context
+  updateSystemPrompt() {
+    let basePrompt = `You are MindScribe, a supportive mental health companion.
+Instructions:
+- Keep answers short (2-3 sentences).
+- Be empathetic but concise.
+- Stop speaking immediately after your turn.
+- Do NOT generate text for the User.`;
+
+    if (this.dassBaseline) {
+      const { scores, severityLevels } = this.dassBaseline;
+      basePrompt += `\n\nUser's DASS-21 Baseline Assessment:
+- Depression: ${scores.depression}/42 (${severityLevels.depression.level})
+- Anxiety: ${scores.anxiety}/42 (${severityLevels.anxiety.level})
+- Stress: ${scores.stress}/42 (${severityLevels.stress.level})
+
+Tailor your responses based on this baseline. Be particularly mindful of their ${
+  severityLevels.depression.level !== 'Normal' ? 'depression' :
+  severityLevels.anxiety.level !== 'Normal' ? 'anxiety' :
+  severityLevels.stress.level !== 'Normal' ? 'stress' : 'overall well-being'
+} levels.`;
+    }
+
+    this.systemPrompt = basePrompt;
   }
 
   // --- LOGGING & STATE MANAGEMENT ---
