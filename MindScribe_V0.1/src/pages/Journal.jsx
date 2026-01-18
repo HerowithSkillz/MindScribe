@@ -87,7 +87,8 @@ const Journal = () => {
       await loadEntries();
     } catch (error) {
       console.error('Save error:', error);
-      alert('Failed to save journal entry');
+      const errorMsg = getErrorMessage('STORAGE', 'JOURNAL_SAVE_FAILED'); // Issue #20
+      alert(errorMsg.user);
     } finally {
       setIsAnalyzing(false);
     }
