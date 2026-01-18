@@ -2,16 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import webLLMService from '../services/webllm';
 import { useWebLLM } from '../contexts/WebLLMContext';
+import { getErrorMessage } from '../constants/errorMessages'; // Issue #20
 
 const Debug = () => {
   const [logs, setLogs] = useState([]);
   const [filter, setFilter] = useState('all');
   const [autoScroll, setAutoScroll] = useState(true);
-  const { modelStatus } = useWebLLM();
+  const { modelStatus, getPreloadEnabled, setPreloadEnabled } = useWebLLM(); // Issue #19: Access preload controls
+  const [preloadEnabled, setPreloadEnabledState] = useState(true); // Issue #19: Local state for toggle
 
   useEffect(() => {
     // Load initial logs
     loadLogs();
+
+    // Issue #19: Load preload preference on mount
+    if (getPreloadEnabled) {
+      setPreloadEnabledState(getPreloadEnabled());
+    }
 
     // Listen for new logs
     const handleNewLog = () => {
@@ -23,7 +30,7 @@ const Debug = () => {
     return () => {
       window.removeEventListener('webllm-debug', handleNewLog);
     };
-  }, []);
+  }, [getPreloadEnabled]);
 
   useEffect(() => {
     if (autoScroll) {
@@ -53,12 +60,20 @@ const Debug = () => {
   const handleClearCache = async () => {
     if (window.confirm('Clear all WebLLM model cache? This will force models to re-download. Use this if you\'re experiencing model loading issues.')) {
       const success = await webLLMService.clearAllCache();
-      if (success) {
-        alert('Cache cleared successfully! Please reload the page.');
-      } else {
-        alert('Failed to clear cache. Please try manually clearing browser data.');
-      }
+      const error = success
+        ? getErrorMessage('CACHE', 'CLEAR_SUCCESS')
+        : getErrorMessage('CACHE', 'CLEAR_FAILED'); // Issue #20
+      alert(error.user);
       loadLogs(); // Refresh to see cache clear log
+    }
+  };
+
+  // Issue #19: Handle preload preference toggle
+  const handleTogglePreload = () => {
+    const newValue = !preloadEnabled;
+    setPreloadEnabledState(newValue);
+    if (setPreloadEnabled) {
+      setPreloadEnabled(newValue);
     }
   };
 
@@ -131,6 +146,44 @@ const Debug = () => {
             <p className="text-purple-400 font-medium">{countByType('task')}</p>
           </div>
         </div>
+      </motion.div>
+
+      {/* Issue #19: Settings Section for Model Preloading */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className="bg-gray-800/50 rounded-lg p-4 mb-6 border border-gray-700"
+      >
+        <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+          ⚙️ Performance Settings
+        </h2>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-white font-medium">Background Model Preloading</p>
+            <p className="text-gray-400 text-sm">
+              Automatically load AI model in background after app starts. Reduces initial chat delay.
+            </p>
+          </div>
+          <button
+            onClick={handleTogglePreload}
+            className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
+              preloadEnabled ? 'bg-green-500' : 'bg-gray-600'
+            }`}
+            title={preloadEnabled ? 'Preloading enabled' : 'Preloading disabled'}
+          >
+            <span
+              className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                preloadEnabled ? 'translate-x-7' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
+        {!preloadEnabled && (
+          <p className="text-yellow-400 text-sm mt-2">
+            ⚠️ Preloading disabled. Model will load only when you first visit Chat or Journal pages.
+          </p>
+        )}
       </motion.div>
 
       {/* Controls */}

@@ -1,13 +1,14 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import webLLMService from '../services/webllm';
 import { setWebLLMInitialize } from './AuthContext';
+import { getErrorMessage, createError } from '../constants/errorMessages'; // Issue #20
 
 const WebLLMContext = createContext(null);
 
 export const useWebLLM = () => {
   const context = useContext(WebLLMContext);
   if (!context) {
-    throw new Error('useWebLLM must be used within WebLLMProvider');
+    throw createError('GENERAL', 'CONTEXT_ERROR'); // Issue #20: useWebLLM outside provider
   }
   return context;
 };
@@ -15,7 +16,7 @@ export const useWebLLM = () => {
 export const WebLLMProvider = ({ children }) => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [progress, setProgress] = useState({ text: '', progress: 0 });
+  const [progress, setProgress] = useState({ text: '', progress: 0, timeElapsed: 0 });
   const [error, setError] = useState(null);
   const [availableModels, setAvailableModels] = useState([]);
   const [currentModel, setCurrentModel] = useState(null);
@@ -99,9 +100,11 @@ export const WebLLMProvider = ({ children }) => {
       }
 
       await webLLMService.initialize((progressReport) => {
+        // Enhanced progress reporting with stage detection
         setProgress({
           text: progressReport.text || 'Loading model...',
-          progress: progressReport.progress || 0
+          progress: progressReport.progress || 0,
+          timeElapsed: progressReport.timeElapsed || 0
         });
       });
 
@@ -143,28 +146,28 @@ export const WebLLMProvider = ({ children }) => {
 
   const chat = useCallback(async (message, history = [], onStream = null) => {
     if (!isInitialized) {
-      throw new Error('Model not initialized. Please wait for initialization to complete.');
+      throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     }
     return await webLLMService.chat(message, history, onStream);
   }, [isInitialized]);
 
   const analyzeJournal = useCallback(async (journalText) => {
     if (!isInitialized) {
-      throw new Error('Model not initialized.');
+      throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     }
     return await webLLMService.analyzeJournal(journalText);
   }, [isInitialized]);
 
   const generateRecommendations = useCallback(async (moodData) => {
     if (!isInitialized) {
-      throw new Error('Model not initialized.');
+      throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     }
     return await webLLMService.generateTherapyRecommendations(moodData);
   }, [isInitialized]);
 
   const generateReport = useCallback(async (userData) => {
     if (!isInitialized) {
-      throw new Error('Model not initialized.');
+      throw createError('MODEL', 'NOT_INITIALIZED'); // Issue #20
     }
     return await webLLMService.generateMentalHealthReport(userData);
   }, [isInitialized]);
@@ -178,22 +181,67 @@ export const WebLLMProvider = ({ children }) => {
     await initialize(true);
   }, [initialize]);
 
+  // Issue #19: Helper to manage preload preference
+  const setPreloadEnabled = useCallback((enabled) => {
+    localStorage.setItem('mindscribe_preload_model', enabled ? 'true' : 'false');
+    console.log(`[Preload] Preference updated: ${enabled ? 'enabled' : 'disabled'}`);
+  }, []);
+
+  const getPreloadEnabled = useCallback(() => {
+    const preloadEnabled = localStorage.getItem('mindscribe_preload_model');
+    return preloadEnabled === null || preloadEnabled === 'true';
+  }, []);
+
   // Register initialize function with AuthContext for auto-initialization on login
   useEffect(() => {
     setWebLLMInitialize(initialize);
   }, [initialize]);
 
-  // Cleanup model on component unmount (React best practice & memory leak prevention)
+  // Issue #19: Intelligent Model Preloading Strategy
+  // Preload model in background after app initialization to reduce perceived latency
   useEffect(() => {
+    // Check if preloading is enabled (default: true)
+    const preloadEnabled = localStorage.getItem('mindscribe_preload_model');
+    const shouldPreload = preloadEnabled === null || preloadEnabled === 'true';
+    
+    if (!shouldPreload) {
+      console.log('[Preload] Model preloading is disabled by user preference');
+      return;
+    }
+
+    // Only preload if model is not already initialized or loading
+    if (isInitialized || isLoading) {
+      return;
+    }
+
+    // Issue #19: Delay preloading to avoid competing with critical UI rendering
+    // According to best practices: Let the app fully render before heavy background tasks
+    const preloadDelay = 2500; // 2.5 seconds - enough time for auth + initial render
+    
+    const preloadTimer = setTimeout(() => {
+      console.log('[Preload] Starting background model initialization...');
+      
+      // Trigger initialization in background
+      // WebLLMContext's initialize() already has:
+      // - Progress tracking
+      // - Error handling with auto-retry
+      // - State management
+      initialize().catch(err => {
+        console.warn('[Preload] Background initialization failed:', err.message);
+        // Error is already handled by initialize() - no need to re-throw
+      });
+    }, preloadDelay);
+
+    // Cleanup timer on unmount or if conditions change
     return () => {
-      // Only attempt cleanup if model was initialized
-      if (isInitialized) {
-        webLLMService.unloadModel()
-          .then(() => console.log('Model unloaded successfully on component unmount'))
-          .catch(err => console.warn('Error unloading model on unmount:', err));
-      }
+      clearTimeout(preloadTimer);
     };
-  }, [isInitialized]);
+  }, [isInitialized, isLoading, initialize]); // Re-evaluate when these change
+
+  // CRITICAL FIX: Don't cleanup on unmount - WebLLMProvider should persist throughout app lifecycle
+  // The provider wraps the entire app in App.jsx, so unmount = app closing
+  // Aggressive cleanup causes "Module has already been disposed" errors during navigation
+  // Model cleanup should only happen on: logout, model switch, or explicit unload
 
   const value = {
     isInitialized,
@@ -211,7 +259,10 @@ export const WebLLMProvider = ({ children }) => {
     generateRecommendations,
     generateReport,
     cancelChat,
-    retryInitialization
+    retryInitialization,
+    // Issue #19: Expose preload preference management
+    setPreloadEnabled,
+    getPreloadEnabled
   };
 
   return <WebLLMContext.Provider value={value}>{children}</WebLLMContext.Provider>;

@@ -7,6 +7,7 @@ import { chatStorage } from '../services/storage';
 import voiceService from '../services/voice';
 import webLLMService from '../services/webllm';
 import ModelSelector from '../components/ModelSelector';
+import { getErrorMessage } from '../constants/errorMessages'; // Issue #20
 
 const Chat = () => {
   const [messages, setMessages] = useState([]);
@@ -18,6 +19,12 @@ const Chat = () => {
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [showAssessmentPrompt, setShowAssessmentPrompt] = useState(false);
+  const [sessionStats, setSessionStats] = useState({ // Issue #18: Track session-wide token usage
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalTokens: 0,
+    messageCount: 0
+  });
   
   const messagesEndRef = useRef(null);
   const streamBufferRef = useRef('');
@@ -58,6 +65,21 @@ const Chat = () => {
     const history = await chatStorage.get(`chat_${user.username}`);
     if (history && Array.isArray(history)) {
       setMessages(history);
+      
+      // Issue #18: Recalculate session stats from loaded history
+      const stats = history.reduce((acc, msg) => {
+        if (msg.role === 'assistant' && msg.usage) {
+          return {
+            totalPromptTokens: acc.totalPromptTokens + (msg.usage.prompt_tokens || 0),
+            totalCompletionTokens: acc.totalCompletionTokens + (msg.usage.completion_tokens || 0),
+            totalTokens: acc.totalTokens + (msg.usage.total_tokens || 0),
+            messageCount: acc.messageCount + 1
+          };
+        }
+        return acc;
+      }, { totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0, messageCount: 0 });
+      
+      setSessionStats(stats);
     }
   };
 
@@ -97,9 +119,10 @@ const Chat = () => {
       }));
 
       let aiResponse = '';
+      let usageData = null; // Issue #18: Capture usage statistics
       
       // Stream the response with optimized batching
-      await chat(
+      const result = await chat(
         userMessage.content,
         conversationHistory,
         (chunk) => {
@@ -108,19 +131,36 @@ const Chat = () => {
         }
       );
 
+      // Issue #18: Extract usage data from result (webllm.js now returns {content, usage})
+      if (result && typeof result === 'object') {
+        aiResponse = result.content || aiResponse;
+        usageData = result.usage;
+      }
+
       // Ensure final update with complete message
       setStreamingMessage(streamBufferRef.current);
 
       const aiMessage = {
         role: 'assistant',
         content: aiResponse,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        usage: usageData // Issue #18: Store usage statistics with message
       };
 
       const updatedMessages = [...newMessages, aiMessage];
       setMessages(updatedMessages);
       setStreamingMessage('');
       streamBufferRef.current = ''; // Clear buffer
+      
+      // Issue #18: Update session statistics
+      if (usageData) {
+        setSessionStats(prev => ({
+          totalPromptTokens: prev.totalPromptTokens + (usageData.prompt_tokens || 0),
+          totalCompletionTokens: prev.totalCompletionTokens + (usageData.completion_tokens || 0),
+          totalTokens: prev.totalTokens + (usageData.total_tokens || 0),
+          messageCount: prev.messageCount + 1
+        }));
+      }
       
       // Save to storage
       await saveChatHistory(updatedMessages);
@@ -136,7 +176,6 @@ const Chat = () => {
       // Always cleanup streaming state on error
       setStreamingMessage('');
       streamBufferRef.current = '';
-      lastUpdateTimeRef.current = 0;
       
       // Handle cancellation differently
       if (error.message === "Request cancelled") {
@@ -160,13 +199,13 @@ const Chat = () => {
       setIsLoading(false);
       setStreamingMessage('');
       streamBufferRef.current = '';
-      lastUpdateTimeRef.current = 0;
     }
   };
 
   const handleVoiceInput = () => {
     if (!voiceService.isSupported()) {
-      alert('Voice input is not supported in your browser');
+      const error = getErrorMessage('VOICE', 'NOT_SUPPORTED'); // Issue #20
+      alert(error.user);
       return;
     }
 
@@ -200,6 +239,12 @@ const Chat = () => {
   const clearChat = async () => {
     if (window.confirm('Are you sure you want to clear the chat history?')) {
       setMessages([]);
+      setSessionStats({ // Issue #18: Reset session stats when clearing chat
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        totalTokens: 0,
+        messageCount: 0
+      });
       await chatStorage.remove(`chat_${user.username}`);
     }
   };
@@ -250,6 +295,23 @@ const Chat = () => {
                 </span>
               )}
             </p>
+            {/* Issue #18: Display session statistics */}
+            {sessionStats.messageCount > 0 && (
+              <div className="mt-2 flex gap-3 text-xs text-gray-500">
+                <span title="Total tokens used in this session">
+                  📊 {sessionStats.totalTokens.toLocaleString()} tokens
+                </span>
+                <span title="Input tokens">
+                  📥 {sessionStats.totalPromptTokens.toLocaleString()}
+                </span>
+                <span title="Output tokens">
+                  📤 {sessionStats.totalCompletionTokens.toLocaleString()}
+                </span>
+                <span title="Number of AI responses">
+                  💬 {sessionStats.messageCount} {sessionStats.messageCount === 1 ? 'response' : 'responses'}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <button
@@ -339,14 +401,30 @@ const Chat = () => {
                 exit={{ opacity: 0, y: -10 }}
                 className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                <div
-                  className={
-                    message.role === 'user'
-                      ? 'chat-message-user'
-                      : 'chat-message-ai'
-                  }
-                >
-                  {message.content}
+                <div className="flex flex-col max-w-[80%]">
+                  <div
+                    className={
+                      message.role === 'user'
+                        ? 'chat-message-user'
+                        : 'chat-message-ai'
+                    }
+                  >
+                    {message.content}
+                  </div>
+                  {/* Issue #18: Display token usage for AI messages */}
+                  {message.role === 'assistant' && message.usage && (
+                    <div className="text-xs text-gray-400 mt-1 px-2 flex gap-2">
+                      <span title="Tokens used in this response">
+                        {message.usage.total_tokens} tokens
+                      </span>
+                      <span title="Input tokens">
+                        ({message.usage.prompt_tokens} in
+                      </span>
+                      <span title="Output tokens">
+                        + {message.usage.completion_tokens} out)
+                      </span>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             ))}
