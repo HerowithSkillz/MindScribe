@@ -17,7 +17,7 @@ const Layout = ({ children }) => {
     { path: '/journal', label: '📝 Journal', icon: '📝' },
     { path: '/dashboard', label: '📊 Dashboard', icon: '📊' },
     { path: '/report', label: '📋 Report', icon: '📋' },
-    { path: '/debug', label: '🐛 Debug', icon: '🐛' },
+    { path: '/assessment', label: '📋 Take Assessment', icon: '📋', highlighted: true },
   ];
 
   return (
@@ -80,9 +80,12 @@ const Layout = ({ children }) => {
                   `px-6 py-3 text-sm font-medium whitespace-nowrap transition-all ${
                     isActive
                       ? 'text-calm-600 border-b-2 border-calm-500'
+                      : item.highlighted
+                      ? 'text-purple-600 hover:text-purple-700 hover:bg-purple-50'
                       : 'text-gray-600 hover:text-calm-600'
                   }`
                 }
+                title={item.path === '/assessment' ? 'Help us understand you better' : ''}
               >
                 {item.label}
               </NavLink>
