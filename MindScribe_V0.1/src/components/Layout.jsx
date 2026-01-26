@@ -14,6 +14,7 @@ const Layout = ({ children }) => {
 
   const navItems = [
     { path: '/chat', label: '💬 Chat', icon: '💬' },
+    { path: '/voice', label: '🎙️ Voice Therapy', icon: '🎙️' },
     { path: '/journal', label: '📝 Journal', icon: '📝' },
     { path: '/dashboard', label: '📊 Dashboard', icon: '📊' },
     { path: '/report', label: '📋 Report', icon: '📋' },

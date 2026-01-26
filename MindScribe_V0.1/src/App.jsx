@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { WebLLMProvider } from './contexts/WebLLMContext';
+import { VoiceProvider } from './contexts/VoiceContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/Login';
 import DASS21 from './components/DASS21';
 import Layout from './components/Layout';
 import ModelInitializationModal from './components/ModelInitializationModal';
 import Chat from './pages/Chat';
+import VoiceTherapy from './pages/VoiceTherapy';
 import Journal from './pages/Journal';
 import Dashboard from './pages/Dashboard';
 import Report from './pages/Report';
@@ -114,6 +116,18 @@ const AppRoutes = () => {
         }
       />
       <Route
+        path="/voice"
+        element={
+          <ProtectedRoute>
+            <ErrorBoundary pageName="Voice Therapy">
+              <Layout>
+                <VoiceTherapy />
+              </Layout>
+            </ErrorBoundary>
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/journal"
         element={
           <ProtectedRoute>
@@ -173,8 +187,10 @@ function App() {
     <Router>
       <AuthProvider>
         <WebLLMProvider>
-          <ModelInitializationModal />
-          <AppRoutes />
+          <VoiceProvider>
+            <ModelInitializationModal />
+            <AppRoutes />
+          </VoiceProvider>
         </WebLLMProvider>
       </AuthProvider>
     </Router>
