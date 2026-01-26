@@ -99,128 +99,178 @@ const engine = await CreateWebWorkerMLCEngine(
 
 ---
 
-### 3. **No Error Recovery for Model Loading Failures**
+### 3. **No Error Recovery for Model Loading Failures** ✅ FIXED
 
-**Location:** `src/contexts/WebLLMContext.jsx` (Lines 73-95)
+**Location:** `src/contexts/WebLLMContext.jsx` (Lines 136-168)
 
 **Issue:**  
-When model initialization fails, the error is logged but the UI remains in a broken state with no retry mechanism.
+When model initialization failed, the error was logged but the UI remained in a broken state with no retry mechanism.
 
-**Current Code:**
+**Fix Implemented (January 26, 2026):**
+
+**Auto-Retry with Exponential Backoff:**
 ```javascript
 try {
   await webLLMService.initialize((progressReport) => {
     setProgress({...});
   });
   setIsInitialized(true);
+  setRetryCount(0);
+  setTimeout(() => setShowLoadingModal(false), 500);
 } catch (err) {
-  console.error('WebLLM initialization failed:', err);
-  setError(err.message || 'Failed to initialize AI model');
-  // ❌ No retry button, no fallback model, no recovery
-} finally {
-  setIsLoading(false);
+  const currentRetryCount = isRetry ? retryCount : 0;
+  
+  // Auto-retry with exponential backoff (max 2 auto-retries)
+  if (currentRetryCount < 2) {
+    const delay = 2000 * Math.pow(2, currentRetryCount); // 2s, 4s
+    const nextRetry = currentRetryCount + 1;
+    setRetryCount(nextRetry);
+    
+    setError({
+      message: `Failed. Retrying in ${delay/1000}s... (${nextRetry}/2)`,
+      isAutoRetrying: true
+    });
+    
+    setTimeout(() => initialize(true), delay);
+  } else {
+    // Final failure - offer manual retry
+    setError({
+      message: 'Failed after multiple attempts.',
+      canRetry: true,
+      suggestion: 'Check internet and GPU availability.'
+    });
+    setShowLoadingModal(false);
+  }
 }
 ```
 
-**According to Best Practices:**
-WebLLM model loading can fail due to:
-- Network interruptions during download
-- Insufficient VRAM
-- Browser incompatibility
-- Cache corruption
+**Benefits:**
+- ✅ **Auto-Recovery:** Automatically retries failed downloads (2s, 4s delays)
+- ✅ **User Feedback:** Clear messages during auto-retry with countdown
+- ✅ **Manual Retry:** Retry button available after all auto-retries fail
+- ✅ **Better UX:** Users don't need to manually retry on temporary network issues
 
-**Recommended Fix:**
+---
+
+### 4. **Hardcoded Encryption Salt - Security Vulnerability** ✅ FIXED
+
+**Location:** `src/services/auth.js` (Lines 19-22, 58), `src/services/storage.js` (Line 37)
+
+**Issue:**  
+The encryption salt was hardcoded and shared across all users, severely weakening encryption.
+
+**Fix Implemented:**
+
+**Per-User Salt Generation (storage.js):**
 ```javascript
-const initialize = useCallback(async (retryCount = 0) => {
-  try {
-    await webLLMService.initialize((progressReport) => {...});
-    setIsInitialized(true);
-    setError(null);
-  } catch (err) {
-    if (retryCount < 2) {
-      // Auto-retry with exponential backoff
-      setTimeout(() => initialize(retryCount + 1), 2000 * (retryCount + 1));
-    } else {
-      setError({
-        message: err.message,
-        canRetry: true,
-        suggestModelChange: true
-      });
-    }
+class CryptoService {
+  static generateSalt() {
+    return window.crypto.getRandomValues(new Uint8Array(16));
   }
-}, []);
+  
+  static async generateKey(password, salt) {
+    // Validate salt parameter
+    if (!salt || !(salt instanceof Uint8Array)) {
+      throw new Error('Valid salt (Uint8Array) is required');
+    }
+    // ... PBKDF2 key derivation
+  }
+}
 ```
+
+**Salt Storage on Registration (auth.js):**
+```javascript
+register: async (username, password) => {
+  // Generate unique salt for this user
+  const userSalt = CryptoService.generateSalt();
+  
+  // Store salt for future logins
+  await userStorage.save(`salt_${username}`, Array.from(userSalt));
+  
+  // Generate encryption key with user-specific salt
+  const encryptionKey = await CryptoService.generateKey(password, userSalt);
+  // ...
+}
+```
+
+**Salt Retrieval on Login (auth.js):**
+```javascript
+login: async (username, password) => {
+  // Retrieve user's unique salt
+  const saltArray = await userStorage.get(`salt_${username}`);
+  const salt = new Uint8Array(saltArray);
+  
+  // Use user-specific salt for key derivation
+  const encryptionKey = await CryptoService.generateKey(password, salt);
+  // ...
+}
+```
+
+**Benefits:**
+- ✅ **Per-User Salts:** Each user gets unique 16-byte cryptographic salt
+- ✅ **Rainbow Table Protection:** Pre-computed attacks no longer feasible
+- ✅ **PBKDF2 Best Practices:** 100,000 iterations with unique salts
+- ✅ **Proper Validation:** Salt validation prevents key derivation errors
 
 ---
 
-### 4. **Hardcoded Encryption Salt - Security Vulnerability**
+### 5. **Model Cleanup Strategy** ✅ RESOLVED
 
-**Location:** `src/services/storage.js` (Line 41)
-
-**Issue:**  
-The encryption salt is hardcoded and shared across all users, which severely weakens the encryption.
-
-**Current Code:**
-```javascript
-salt: encoder.encode('mindscribe-salt-2025'), // ❌ Same salt for everyone
-```
-
-**Security Impact:**
-- Rainbow table attacks possible
-- If one user's password is cracked, all users with the same password are compromised
-- Does not follow PBKDF2 best practices
-
-**Recommended Fix:**
-```javascript
-// Generate unique salt per user during registration
-const userSalt = crypto.getRandomValues(new Uint8Array(16));
-await userStorage.save(`salt_${username}`, Array.from(userSalt));
-
-// Use user-specific salt for key derivation
-const saltArray = await userStorage.get(`salt_${username}`);
-const salt = new Uint8Array(saltArray);
-```
-
----
-
-### 5. **Missing Model Unload on Component Unmount**
-
-**Location:** `src/contexts/WebLLMContext.jsx`
+**Location:** `src/contexts/WebLLMContext.jsx`, `src/contexts/AuthContext.jsx` (Lines 109-113)
 
 **Issue:**  
-The `WebLLMProvider` doesn't clean up the AI model when the component unmounts, leading to memory leaks.
+Initial concern about model not being cleaned up on component unmount.
 
-**Current Code:**
+**Resolution:**
+
+**Design Decision - Intentional Behavior:**
+The `WebLLMProvider` wraps the entire app in App.jsx, so unmount = app closing. Aggressive cleanup on unmount causes "Module has already been disposed" errors during navigation.
+
+**Implemented Strategy (Lines 217-223):**
 ```javascript
-export const WebLLMProvider = ({ children }) => {
-  // ... state and functions
+// CRITICAL FIX: Don't cleanup on unmount - WebLLMProvider should persist throughout app lifecycle
+// The provider wraps the entire app in App.jsx, so unmount = app closing
+// Aggressive cleanup causes "Module has already been disposed" errors during navigation
+// Model cleanup should only happen on: logout, model switch, or explicit unload
+```
+
+**Cleanup Triggers:**
+
+1. **On Logout (AuthContext.jsx):**
+```javascript
+const logout = async () => {
+  // Unload AI model and clean up resources
+  await webLLMService.unloadModel();
   
-  // ❌ No useEffect cleanup for unmount
-  
-  return <WebLLMContext.Provider value={value}>{children}</WebLLMContext.Provider>;
+  // Reset WebLLM context state
+  if (window.webLLMResetState) {
+    window.webLLMResetState();
+  }
 };
 ```
 
-**According to React Best Practices:**
-Heavy resources like AI models should be released on unmount.
-
-**Recommended Fix:**
+2. **On Model Switch (WebLLMContext.jsx):**
 ```javascript
-export const WebLLMProvider = ({ children }) => {
-  // ... existing code
-  
-  useEffect(() => {
-    return () => {
-      // Cleanup on unmount
-      webLLMService.unloadModel().catch(err => 
-        console.warn('Cleanup error:', err)
-      );
-    };
-  }, []);
-  
-  return <WebLLMContext.Provider value={value}>{children}</WebLLMContext.Provider>;
+const selectModel = async (modelId) => {
+  await webLLMService.setModel(modelId);
+  setIsInitialized(false); // Triggers re-init
 };
 ```
+
+3. **Manual Cleanup (WebLLMContext.jsx):**
+```javascript
+const cleanup = async () => {
+  await webLLMService.unloadModel();
+  setIsInitialized(false);
+  setProgress({ text: '', progress: 0 });
+};
+```
+
+**Benefits:**
+- ✅ **Prevents Navigation Errors:** No "Module disposed" crashes during page transitions
+- ✅ **Controlled Cleanup:** Only unload when necessary (logout, model switch)
+- ✅ **Better Performance:** Model stays loaded during navigation for instant responses
+- ✅ **Proper Resource Management:** Cleanup happens at appropriate lifecycle points
 
 ---
 
@@ -408,10 +458,10 @@ const ERROR_MESSAGES = {
 
 | Severity | Count | Status |
 |----------|-------|--------|
-| 🔴 Critical | 5 | ⚠️ Needs Attention |
-| ✅ Critical (Fixed) | 2 | Issues #6-#7 Resolved |
+| 🔴 Critical | 2 | ⚠️ Needs Attention |
+| ✅ Critical (Fixed) | 5 | Issues #3-#7 Resolved |
 | 🔵 Low | 3 | 💡 Optional Enhancement |
-| **Total** | **10** | **5 Critical + 2 Fixed + 3 Optional** |
+| **Total** | **10** | **2 Critical + 5 Fixed + 3 Optional** |
 
 ---
 
@@ -420,21 +470,25 @@ const ERROR_MESSAGES = {
 ### Immediate (Before Production):
 1. ❌ Fix AppConfig structure (#1)
 2. ❌ Use WebLLM prebuilt models (#2)
-3. ❌ Add error recovery (#3)
-4. ❌ Fix security vulnerabilities (#4, #5)
-5. ✅ ~~Fix aggressive cache purging (#6)~~ - **FIXED** ✅
-6. ✅ ~~Fix model re-initialization after logout (#7)~~ - **FIXED** ✅
+3. ✅ ~~Add error recovery (#3)~~ - **FIXED** ✅
+4. ✅ ~~Fix encryption salt vulnerability (#4)~~ - **FIXED** ✅
+5. ✅ ~~Model cleanup strategy (#5)~~ - **RESOLVED** ✅
+6. ✅ ~~Fix aggressive cache purging (#6)~~ - **FIXED** ✅
+7. ✅ ~~Fix model re-initialization after logout (#7)~~ - **FIXED** ✅
 
 ### Long Term (Nice to Have):
-7. 💡 Add usage statistics (#8)
-8. 💡 Implement model preloading (#9)
-9. 💡 Standardize error messages (#10)
+8. 💡 Add usage statistics (#8)
+9. 💡 Implement model preloading (#9)
+10. 💡 Standardize error messages (#10)
 
 ---
 
 ## ✅ COMPLETED ISSUES
 
 ### Recently Fixed (January 26, 2026):
+- **Issue #3:** Error Recovery - Implemented auto-retry with exponential backoff (2s, 4s delays) and manual retry option
+- **Issue #4:** Encryption Salt Security - Implemented per-user cryptographic salts (16-byte) stored in IndexedDB
+- **Issue #5:** Model Cleanup Strategy - Resolved with proper cleanup triggers (logout, model switch, manual)
 - **Issue #6:** Aggressive Cache Purging - Models now persist across project restarts and model switches
 - **Issue #7:** Model Re-initialization Bug - Fixed model not reloading after logout/login cycle, added blocking UI during initialization
 
@@ -467,4 +521,4 @@ The following issues were successfully resolved in earlier iterations:
 
 **Report Generated By:** Claude Sonnet 4.5  
 **Analysis Tool:** Manual code review + WebLLM documentation cross-reference  
-**Last Updated:** January 6, 2026
+**Last Updated:** January 26, 2026
