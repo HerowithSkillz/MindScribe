@@ -15,6 +15,8 @@ import whisperService from './whisper.js';
 import piperService from './piper.js';
 import webLLMService from './webllm.js';
 import audioRecorder from './audioRecorder.js';
+import { getVADInstance } from './vad.js';
+import { trimSilence, normalizeAudio } from '../utils/vadHelpers.js';
 
 class VoicePipeline {
   constructor() {
@@ -22,21 +24,25 @@ class VoicePipeline {
     this.conversationHistory = [];
     this.audioContext = null;
     this.currentAudioSource = null;
+    this.vadInstance = null;
+    this.useVAD = true; // Enable VAD by default
     
     // Performance tracking
     this.lastProcessingTime = {
       stt: 0,
       llm: 0,
       tts: 0,
+      vad: 0,
       total: 0
     };
   }
 
   /**
    * Initialize voice pipeline
+   * @param {Object} options - Initialization options
    * @returns {Promise<void>}
    */
-  async initialize() {
+  async initialize(options = {}) {
     try {
       console.log('[VoicePipeline] Initializing...');
 
@@ -44,6 +50,21 @@ class VoicePipeline {
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: 22050 // Piper TTS outputs 22.05kHz
       });
+
+      // Initialize VAD if enabled
+      this.useVAD = options.useVAD !== false;
+      if (this.useVAD) {
+        try {
+          console.log('[VoicePipeline] Initializing VAD...');
+          this.vadInstance = getVADInstance();
+          await this.vadInstance.init();
+          console.log('✅ VAD initialized');
+        } catch (error) {
+          console.warn('⚠️ VAD initialization failed, continuing without VAD:', error);
+          this.useVAD = false;
+          this.vadInstance = null;
+        }
+      }
 
       console.log('✅ Voice pipeline initialized');
     } catch (error) {
@@ -54,10 +75,43 @@ class VoicePipeline {
 
   /**
    * Process voice input through complete pipeline
-   * @param {Float32Array} audioData - Input audio from microphone (16kHz)
-   * @param {Object} options - Processing options
-   * @returns {Promise<Object>} - {transcript, aiResponse, audioOutput}
-   */
+   * @param {F0: Voice Activity Detection & Audio Preprocessing
+      let processedAudio = audioData;
+      if (this.useVAD && this.vadInstance) {
+        console.log('🎙️ Step 0: Running VAD and preprocessing...');
+        const vadStart = performance.now();
+        
+        try {
+          // Reset VAD state for new audio
+          this.vadInstance.resetStates();
+          
+          // Detect speech segments
+          const segments = await this.vadInstance.detectSpeechSegments(audioData);
+          console.log(`📊 VAD detected ${segments.length} speech segment(s)`);
+          
+          if (segments.length === 0) {
+            console.warn('⚠️ No speech detected by VAD');
+            throw new Error('No speech detected');
+          }
+          
+          // Trim silence from audio
+          processedAudio = trimSilence(audioData);
+          
+          // Normalize audio levels
+          processedAudio = normalizeAudio(processedAudio);
+          
+          this.lastProcessingTime.vad = performance.now() - vadStart;
+          console.log(`✅ VAD & preprocessing complete (${this.lastProcessingTime.vad.toFixed(0)}ms)`);
+        } catch (vadError) {
+          console.warn('⚠️ VAD processing failed, using raw audio:', vadError);
+          this.lastProcessingTime.vad = performance.now() - vadStart;
+        }
+      }
+
+      // Step 1: Speech-to-Text (Whisper)
+      console.log('🎤 Step 1: Transcribing speech...');
+      const sttStart = performance.now();
+      const transcript = await whisperService.transcribe(processedAudio
   async processVoiceInput(audioData, options = {}) {
     if (this.isProcessing) {
       console.warn('⚠️ Already processing voice input');
@@ -91,7 +145,12 @@ class VoicePipeline {
       const contextHistory = this.conversationHistory.slice(-6); // 3 user + 3 AI messages
       
       const aiResponse = await webLLMService.chat(
-        transcript,
+      
+      if (this.useVAD) {
+        console.log(`📊 Breakdown: VAD=${this.lastProcessingTime.vad.toFixed(0)}ms, STT=${this.lastProcessingTime.stt.toFixed(0)}ms, LLM=${this.lastProcessingTime.llm.toFixed(0)}ms, TTS=${this.lastProcessingTime.tts.toFixed(0)}ms`);
+      } else {
+        console.log(`📊 Breakdown: STT=${this.lastProcessingTime.stt.toFixed(0)}ms, LLM=${this.lastProcessingTime.llm.toFixed(0)}ms, TTS=${this.lastProcessingTime.tts.toFixed(0)}ms`);
+      }
         contextHistory,
         null,
         {
@@ -312,11 +371,37 @@ class VoicePipeline {
       this.audioContext = null;
     }
 
+    // Cleanup VAD
+    if (this.vadInstance) {
+      await this.vadInstance.dispose();
+      this.vadInstance = null;
+    }
+
     await audioRecorder.cleanup();
     
     this.conversationHistory = [];
     this.isProcessing = false;
     console.log('🗑️ Voice pipeline cleaned up');
+  }
+
+  /**
+   * Toggle VAD on/off
+   * @param {boolean} enabled - Enable or disable VAD
+   */
+  setVADEnabled(enabled) {
+    this.useVAD = enabled && this.vadInstance !== null;
+    console.log(`[VoicePipeline] VAD ${this.useVAD ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
+   * Get VAD state
+   * @returns {Object|null} - VAD state or null if disabled
+   */
+  getVADState() {
+    if (this.vadInstance) {
+      return this.vadInstance.getState();
+    }
+    return null;
   }
 }
 

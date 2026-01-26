@@ -7,6 +7,7 @@ import { chatStorage } from '../services/storage';
 import voiceService from '../services/voice';
 import webLLMService from '../services/webllm';
 import ModelSelector from '../components/ModelSelector';
+import ModelInitializationModal from '../components/ModelInitializationModal';
 import { getErrorMessage } from '../constants/errorMessages'; // Issue #20
 
 const Chat = () => {
@@ -249,37 +250,12 @@ const Chat = () => {
     }
   };
 
-  if (modelLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[calc(100vh-200px)]">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="card max-w-md w-full text-center"
-        >
-          <div className="text-6xl mb-4">🧠</div>
-          <h2 className="text-2xl font-display font-semibold text-calm-600 mb-4">
-            Loading AI Model
-          </h2>
-          <p className="text-gray-600 mb-4">{progress.text}</p>
-          <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-            <motion.div
-              className="bg-calm-500 h-full"
-              initial={{ width: 0 }}
-              animate={{ width: `${progress.progress * 100}%` }}
-              transition={{ duration: 0.3 }}
-            />
-          </div>
-          <p className="text-sm text-gray-500 mt-2">
-            {Math.round(progress.progress * 100)}%
-          </p>
-        </motion.div>
-      </div>
-    );
-  }
-
   return (
-    <div className="h-[calc(100vh-200px)] flex flex-col">
+    <>
+      {/* Model Initialization Modal */}
+      <ModelInitializationModal />
+      
+      <div className="h-[calc(100vh-200px)] flex flex-col">
       <div className="card flex-1 flex flex-col">
         {/* Header */}
         <div className="flex justify-between items-center pb-4 border-b border-gray-200">
@@ -526,6 +502,7 @@ const Chat = () => {
       {/* Model Selector Modal */}
       <ModelSelector isOpen={showModelSelector} onClose={() => setShowModelSelector(false)} />
     </div>
+    </>
   );
 };
 

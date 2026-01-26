@@ -36,9 +36,9 @@ Instructions:
    * Unloads WebLLM, loads Whisper + Piper
    */
   async switchToVoiceTab() {
-    if (this.isTransitioning) {
-      console.warn('⚠️ Model transition already in progress');
-      return;
+    // Wait for any ongoing transition
+    while (this.isTransitioning) {
+      await this.sleep(100);
     }
 
     if (this.activeTab === 'voice') {
@@ -50,16 +50,16 @@ Instructions:
       this.isTransitioning = true;
       console.log('[ModelOrchestrator] Switching to Voice Therapy tab...');
 
-      // Step 1: Unload WebLLM model (frees ~1-2GB memory)
-      if (this.activeModels.webllm) {
-        console.log('[ModelOrchestrator] Unloading WebLLM...');
-        await webLLMService.unloadModel();
-        this.activeModels.webllm = false;
-        console.log('✅ WebLLM unloaded');
+      // Step 1: Keep WebLLM loaded (needed for text generation in voice mode)
+      // We don't unload it to avoid 2.1GB memory footprint
+      if (!this.activeModels.webllm) {
+        console.log('[ModelOrchestrator] WebLLM not loaded, will initialize after voice models');
+      } else {
+        console.log('[ModelOrchestrator] Keeping WebLLM loaded for text generation');
       }
 
-      // Small delay to ensure cleanup
-      await this.sleep(500);
+      // Small delay for state sync
+      await this.sleep(100);
 
       // Step 2: Load Whisper STT (~388MB for base.en)
       if (!this.activeModels.whisper) {
@@ -77,21 +77,14 @@ Instructions:
         console.log('✅ Piper TTS loaded');
       }
 
-      // Step 4: Re-initialize WebLLM with voice therapy prompt (lightweight - keeps text generation)
-      // WebLLM engine stays for response generation, just change system prompt
-      console.log('[ModelOrchestrator] Initializing WebLLM for voice therapy...');
-      const originalPrompt = webLLMService.systemPrompt;
+      // Step 4: Update WebLLM system prompt for voice therapy
+      console.log('[ModelOrchestrator] Switching WebLLM to voice therapy mode...');
       webLLMService.systemPrompt = this.VOICE_THERAPY_PROMPT;
-      
-      // Initialize if not already initialized
-      if (!webLLMService.isInitialized) {
-        await webLLMService.initialize();
-      }
-      this.activeModels.webllm = true;
+      this.activeModels.webllm = true; // Mark as active
 
       this.activeTab = 'voice';
       console.log('✅ [ModelOrchestrator] Voice Therapy tab ready');
-      console.log(`📊 Memory footprint: Whisper (388MB) + Piper (200MB) + WebLLM (1.5GB) ≈ 2.1GB`);
+      console.log(`📊 Memory footprint: Whisper (388MB) + Piper (200MB) + WebLLM (shared) ≈ ~600MB new`);
 
     } catch (error) {
       console.error('❌ Failed to switch to voice tab:', error);
@@ -106,9 +99,9 @@ Instructions:
    * Unloads Whisper + Piper, reloads WebLLM with default prompt
    */
   async switchFromVoiceTab(targetTab = 'chat') {
-    if (this.isTransitioning) {
-      console.warn('⚠️ Model transition already in progress');
-      return;
+    // Wait for any ongoing transition
+    while (this.isTransitioning) {
+      await this.sleep(100);
     }
 
     if (this.activeTab !== 'voice') {

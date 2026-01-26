@@ -4,6 +4,7 @@ import whisperService from '../services/whisper';
 import piperService from '../services/piper';
 import audioRecorder from '../services/audioRecorder';
 import voicePipeline from '../services/voicePipeline';
+import voiceSessionStorage from '../services/voiceSessionStorage';
 import { useAuth } from './AuthContext';
 
 const VoiceContext = createContext(null);
@@ -29,14 +30,24 @@ export const VoiceProvider = ({ children }) => {
   const [sessionActive, setSessionActive] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [processingMetrics, setProcessingMetrics] = useState(null);
+  const [sessionHistory, setSessionHistory] = useState([]);
   
   const recordingIntervalRef = useRef(null);
   const sessionStartTimeRef = useRef(null);
+  const currentSessionIdRef = useRef(null);
+  const isInitializingRef = useRef(false);
+  const isCleaningUpRef = useRef(false);
 
   /**
    * Initialize voice models - called when user navigates to Voice Therapy tab
    */
   const initializeVoiceModels = useCallback(async () => {
+    if (isInitializingRef.current) {
+      console.log('Initialization already in progress');
+      return;
+    }
+    isInitializingRef.current = true;
+
     if (isReady || isLoading) {
       console.log('Voice models already initialized or loading');
       return;
@@ -47,13 +58,21 @@ export const VoiceProvider = ({ children }) => {
       setError(null);
       console.log('[VoiceContext] Initializing voice models...');
 
-      // Step 1: Switch to voice tab (unload WebLLM, load Whisper + Piper)
-      setLoadingProgress({ text: 'Preparing voice therapy session...', progress: 10 });
+      // Step 1: Initialize voice session storage
+      setLoadingProgress({ text: 'Initializing storage...', progress: 5 });
+      await voiceSessionStorage.init();
+
+      // Step 2: Switch to voice tab (unload WebLLM, load Whisper + Piper)
+      setLoadingProgress({ text: 'Preparing voice therapy session...', progress: 20 });
       await modelOrchestrator.switchToVoiceTab();
 
-      // Step 2: Initialize voice pipeline
-      setLoadingProgress({ text: 'Initializing audio system...', progress: 80 });
-      await voicePipeline.initialize();
+      // Step 3: Initialize voice pipeline with VAD
+      setLoadingProgress({ text: 'Initializing audio system and VAD...', progress: 70 });
+      await voicePipeline.initialize({ useVAD: true });
+
+      // Step 4: Load recent sessions
+      setLoadingProgress({ text: 'Loading session history...', progress: 90 });
+      await loadSessionHistory();
 
       setLoadingProgress({ text: 'Ready!', progress: 100 });
       setIsReady(true);
@@ -65,6 +84,7 @@ export const VoiceProvider = ({ children }) => {
       setIsReady(false);
     } finally {
       setIsLoading(false);
+      isInitializingRef.current = false;
     }
   }, [isReady, isLoading]);
 
@@ -72,6 +92,12 @@ export const VoiceProvider = ({ children }) => {
    * Cleanup voice models - called when user leaves Voice Therapy tab
    */
   const cleanupVoiceModels = useCallback(async () => {
+    if (isCleaningUpRef.current) {
+      console.log('Cleanup already in progress');
+      return;
+    }
+    isCleaningUpRef.current = true;
+
     try {
       console.log('[VoiceContext] Cleaning up voice models...');
 
@@ -92,6 +118,8 @@ export const VoiceProvider = ({ children }) => {
 
     } catch (err) {
       console.error('❌ Failed to cleanup voice models:', err);
+    } finally {
+      isCleaningUpRef.current = false;
     }
   }, [sessionActive]);
 
@@ -140,12 +168,20 @@ export const VoiceProvider = ({ children }) => {
       return;
     }
 
+    // Prevent double cleanup
+    setSessionActive(false);
+
     try {
       console.log('[VoiceContext] Ending voice therapy session...');
 
-      // Stop recording if active
+      // Stop recording if active (don't await to avoid delays)
       if (isRecording) {
-        await stopRecording();
+        setIsRecording(false);
+        try {
+          audioRecorder.stopRecording();
+        } catch (err) {
+          console.warn('Recording already stopped:', err.message);
+        }
       }
 
       // Stop any audio playback
@@ -153,6 +189,32 @@ export const VoiceProvider = ({ children }) => {
 
       // End voice pipeline session
       const session = await voicePipeline.endSession();
+
+      // Save session to IndexedDB storage
+      try {
+        const sessionDuration = (Date.now() - sessionStartTimeRef.current) / 1000;
+        const sessionData = {
+          timestamp: new Date().toISOString(),
+          date: new Date().toISOString().split('T')[0],
+          userId: user?.username || 'default',
+          duration: sessionDuration,
+          conversationHistory: conversationHistory,
+          processingMetrics: processingMetrics,
+          vadEnabled: voicePipeline.getVADState()?.isInitialized || false,
+          whisperModel: 'base.en',
+          piperVoice: 'lessac-medium',
+          averageLatency: processingMetrics?.total || 0
+        };
+
+        currentSessionIdRef.current = await voiceSessionStorage.saveSession(sessionData);
+        console.log(`✅ Session saved with ID: ${currentSessionIdRef.current}`);
+
+        // Reload session history
+        await loadSessionHistory();
+      } catch (storageError) {
+        console.error('❌ Failed to save session:', storageError);
+        // Continue even if storage fails
+      }
 
       // TODO: Save session to storage (encrypted)
       // const sessionData = {
@@ -162,7 +224,7 @@ export const VoiceProvider = ({ children }) => {
       // };
       // await voiceSessionStorage.save(`voice_session_${Date.now()}`, sessionData);
 
-      setSessionActive(false);
+      // setSessionActive already set to false at start of function
       setIsRecording(false);
       setIsProcessing(false);
       setIsSpeaking(false);
@@ -299,6 +361,87 @@ export const VoiceProvider = ({ children }) => {
   }, []);
 
   /**
+   * Load session history from storage
+   */
+  const loadSessionHistory = useCallback(async () => {
+    try {
+      const sessions = await voiceSessionStorage.getAllSessions({
+        limit: 50,
+        sortBy: 'timestamp',
+        sortOrder: 'desc',
+        includeConversations: false
+      });
+      setSessionHistory(sessions);
+      console.log(`Loaded ${sessions.length} sessions from history`);
+    } catch (error) {
+      console.error('Failed to load session history:', error);
+    }
+  }, []);
+
+  /**
+   * Get specific session by ID
+   */
+  const getSession = useCallback(async (sessionId) => {
+    try {
+      return await voiceSessionStorage.getSession(sessionId);
+    } catch (error) {
+      console.error('Failed to get session:', error);
+      return null;
+    }
+  }, []);
+
+  /**
+   * Delete session by ID
+   */
+  const deleteSession = useCallback(async (sessionId) => {
+    try {
+      await voiceSessionStorage.deleteSession(sessionId);
+      await loadSessionHistory();
+      console.log(`Session ${sessionId} deleted`);
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+      throw error;
+    }
+  }, [loadSessionHistory]);
+
+  /**
+   * Export session history
+   */
+  const exportSessionHistory = useCallback(async () => {
+    try {
+      const jsonData = await voiceSessionStorage.exportSessions();
+      
+      // Create download link
+      const blob = new Blob([jsonData], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mindscribe-voice-sessions-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      console.log('Session history exported successfully');
+    } catch (error) {
+      console.error('Failed to export sessions:', error);
+      throw error;
+    }
+  }, []);
+
+  /**
+   * Get session statistics
+   */
+  const getSessionStatistics = useCallback(async () => {
+    try {
+      return await voiceSessionStorage.getStatistics();
+    } catch (error) {
+      console.error('Failed to get statistics:', error);
+      return null;
+    }
+  }, []);
+
+  /**
    * Get session duration in seconds
    */
   const getSessionDuration = useCallback(() => {
@@ -334,6 +477,7 @@ export const VoiceProvider = ({ children }) => {
     sessionActive,
     recordingDuration,
     processingMetrics,
+    sessionHistory,
     
     // Actions
     initializeVoiceModels,
@@ -344,7 +488,14 @@ export const VoiceProvider = ({ children }) => {
     stopRecording,
     cancelAudio,
     clearHistory,
-    getSessionDuration
+    getSessionDuration,
+    
+    // Session Management
+    loadSessionHistory,
+    getSession,
+    deleteSession,
+    exportSessionHistory,
+    getSessionStatistics
   };
 
   return (

@@ -16,6 +16,7 @@ const VoiceSessionControls = ({
   isProcessing,
   isSpeaking,
   recordingDuration,
+  conversationHistory = [],
   onStartSession,
   onEndSession,
   onStartRecording,

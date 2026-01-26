@@ -17,10 +17,13 @@
  * https://github.com/rhasspy/piper-samples (demo implementation)
  */
 
-// Import ONNX Runtime Web in worker
-// NOTE: This import path needs to be adjusted based on your build setup
-// For Vite, you may need to use a CDN or copy the files to public/
-importScripts('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/ort.min.js');
+// NOTE: ONNX Runtime Web import is handled differently in module workers
+// For now, this is a placeholder structure. Production implementation
+// would use dynamic import() or preloaded ONNX Runtime
+// import * as ort from 'onnxruntime-web';
+
+// PLACEHOLDER: ONNX Runtime will be available via dynamic import in production
+const ort = null; // Placeholder
 
 let onnxSession = null;
 let voiceConfig = null;

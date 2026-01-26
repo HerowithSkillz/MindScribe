@@ -1,10 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useVoice } from '../contexts/VoiceContext';
 import VoiceSessionControls from '../components/VoiceSessionControls';
 import ConversationDisplay from '../components/ConversationDisplay';
 import VoiceVisualizer from '../components/VoiceVisualizer';
-import LoadingProgress from '../components/LoadingProgress';
 
 /**
  * Voice Therapy Page
@@ -38,15 +37,21 @@ const VoiceTherapy = () => {
     clearHistory
   } = useVoice();
 
-  // Initialize voice models when component mounts
+  // Prevent re-initialization on every render
+  const hasInitialized = useRef(false);
+
+  // Initialize voice models when component mounts (only once)
   useEffect(() => {
-    initializeVoiceModels();
+    if (!hasInitialized.current) {
+      hasInitialized.current = true;
+      initializeVoiceModels();
+    }
 
     // Cleanup when leaving page
     return () => {
       cleanupVoiceModels();
     };
-  }, [initializeVoiceModels, cleanupVoiceModels]);
+  }, []); // Empty deps array - run only on mount/unmount
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
@@ -65,26 +70,90 @@ const VoiceTherapy = () => {
           </p>
         </motion.div>
 
-        {/* Loading State */}
-        {isLoading && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="max-w-2xl mx-auto"
-          >
-            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
-              <LoadingProgress
-                progress={loadingProgress.progress}
-                text={loadingProgress.text}
-                showPercentage={true}
-              />
-              <div className="mt-6 space-y-2 text-sm text-gray-600 dark:text-gray-400">
-                <p>⏳ Loading voice models...</p>
-                <p className="text-xs">This may take a few moments on first use (models are cached)</p>
-              </div>
-            </div>
-          </motion.div>
-        )}
+        {/* Loading State - Full Screen Modal */}
+        <AnimatePresence>
+          {isLoading && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+            >
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4"
+              >
+                {/* Header */}
+                <div className="text-center mb-6">
+                  <div className="text-6xl mb-4">🎙️</div>
+                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                    Initializing Voice Therapy
+                  </h2>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Setting up voice models...
+                  </p>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {loadingProgress.text}
+                    </span>
+                    <span className="text-sm font-semibold text-blue-600 dark:text-blue-400">
+                      {Math.round(loadingProgress.progress)}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${loadingProgress.progress}%` }}
+                      transition={{ duration: 0.3 }}
+                      className="h-full bg-gradient-to-r from-blue-500 to-purple-600 rounded-full"
+                    />
+                  </div>
+                </div>
+
+                {/* Loading Steps */}
+                <div className="space-y-3 mb-6">
+                  <div className={`flex items-center gap-3 text-sm ${loadingProgress.progress >= 5 ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-600'}`}>
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center ${loadingProgress.progress >= 5 ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'}`}>
+                      {loadingProgress.progress >= 5 ? '✓' : '○'}
+                    </div>
+                    <span>Loading WebLLM model</span>
+                  </div>
+                  <div className={`flex items-center gap-3 text-sm ${loadingProgress.progress >= 20 ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-600'}`}>
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center ${loadingProgress.progress >= 20 ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'}`}>
+                      {loadingProgress.progress >= 20 ? '✓' : '○'}
+                    </div>
+                    <span>Initializing Whisper (Speech Recognition)</span>
+                  </div>
+                  <div className={`flex items-center gap-3 text-sm ${loadingProgress.progress >= 70 ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-600'}`}>
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center ${loadingProgress.progress >= 70 ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'}`}>
+                      {loadingProgress.progress >= 70 ? '✓' : '○'}
+                    </div>
+                    <span>Loading Piper (Text-to-Speech)</span>
+                  </div>
+                  <div className={`flex items-center gap-3 text-sm ${loadingProgress.progress >= 90 ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-600'}`}>
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center ${loadingProgress.progress >= 90 ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'}`}>
+                      {loadingProgress.progress >= 90 ? '✓' : '○'}
+                    </div>
+                    <span>Preparing voice pipeline</span>
+                  </div>
+                </div>
+
+                {/* Info Message */}
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+                  <p className="text-xs text-blue-800 dark:text-blue-300 text-center">
+                    💾 Models are cached locally after first download
+                  </p>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Error State */}
         {error && (
