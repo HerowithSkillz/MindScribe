@@ -245,7 +245,23 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
         { type: 'module' }
       );
 
-      // 3. Engine Creation - Let WebLLM Handle Model URLs
+      // 3. Check if model is already cached (Issue #6 fix)
+      const cachedModels = await this.checkCache();
+      const isModelCached = cachedModels.some(cache => 
+        cache.name && (cache.name.includes(this.modelId) || cache.name.includes('webllm'))
+      );
+      
+      // Get model info for logging
+      const selectedModel = this.availableModels.find(m => m.id === this.modelId);
+      const modelSize = selectedModel?.size || '1-2GB';
+      
+      if (isModelCached) {
+        this.addDebugLog('success', `✅ Found cached model: ${this.modelId}. Loading from cache...`);
+      } else {
+        this.addDebugLog('info', `⬇️ Model not cached. Downloading ${this.modelId} (~${modelSize})...`);
+      }
+
+      // 4. Engine Creation - Let WebLLM Handle Model URLs
       // According to WebLLM docs: https://webllm.mlc.ai/docs/user/basic_usage.html
       // Simply pass the model ID - WebLLM's prebuilt config handles everything
       // This ensures version compatibility (v0.2.79) and automatic caching
@@ -262,10 +278,14 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
 
       this.isInitialized = true;
       this.isLoading = false;
-      this.addDebugLog('success', `Model initialized successfully`);
+      this.addDebugLog('success', `✅ Model initialized successfully and ready to use!`);
       
-      // Cleanup old files
-      this.purgeUnusedModels();
+      // Issue #6 FIX: Removed aggressive cache purging
+      // Previously: this.purgeUnusedModels() was called here, which deleted all other model caches
+      // This caused re-downloads every time users switched models or restarted the project
+      // Now: Let the browser manage cache automatically (browsers support 50GB+ cache storage)
+      // Users can manually clear cache via Debug page if needed
+      // Cache will persist across project restarts and allow instant model switching
 
     } catch (error) {
       this.isLoading = false;

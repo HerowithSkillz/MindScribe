@@ -25,54 +25,21 @@ const ModelInitializationModal = () => {
     progress, 
     error, 
     retryInitialization,
-    currentModel 
+    currentModel,
+    showLoadingModal // NEW: Use centrally managed modal state
   } = useWebLLM();
 
   const [currentQuote, setCurrentQuote] = useState(0);
-  const [showModal, setShowModal] = useState(false);
-  const [minDisplayTimeElapsed, setMinDisplayTimeElapsed] = useState(false);
 
   // Rotate quotes every 5 seconds
   useEffect(() => {
-    if (isLoading) {
+    if (showLoadingModal && isLoading) {
       const interval = setInterval(() => {
         setCurrentQuote((prev) => (prev + 1) % MENTAL_HEALTH_QUOTES.length);
       }, 5000);
       return () => clearInterval(interval);
     }
-  }, [isLoading]);
-
-  // Show modal when loading starts - with minimum display time
-  useEffect(() => {
-    if (isLoading) {
-      setShowModal(true);
-      setMinDisplayTimeElapsed(false);
-      
-      // Minimum display time of 800ms to ensure user sees the modal
-      const minTimer = setTimeout(() => {
-        setMinDisplayTimeElapsed(true);
-      }, 800);
-      
-      return () => clearTimeout(minTimer);
-    }
-  }, [isLoading]);
-
-  // Handle modal visibility for error states
-  useEffect(() => {
-    if (error && !isInitialized) {
-      setShowModal(true);
-    }
-  }, [error, isInitialized]);
-
-  // Hide modal only after initialization succeeds AND minimum time elapsed
-  useEffect(() => {
-    if (isInitialized && !error && minDisplayTimeElapsed) {
-      const timer = setTimeout(() => {
-        setShowModal(false);
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [isInitialized, error, minDisplayTimeElapsed]);
+  }, [showLoadingModal, isLoading]);
 
   // Calculate progress percentage
   const progressPercent = Math.round((progress.progress || 0) * 100);
@@ -101,12 +68,13 @@ const ModelInitializationModal = () => {
 
   return (
     <AnimatePresence>
-      {showModal && (
+      {showLoadingModal && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          style={{ pointerEvents: 'auto' }} // Block all interaction with background
         >
           <motion.div
             initial={{ scale: 0.9, opacity: 0 }}

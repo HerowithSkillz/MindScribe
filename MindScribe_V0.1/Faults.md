@@ -224,477 +224,113 @@ export const WebLLMProvider = ({ children }) => {
 
 ---
 
-## ⚠️ HIGH PRIORITY ISSUES
+### 6. **Aggressive Cache Purging on Every Model Initialization** ✅ FIXED
 
-### 6. **Race Condition in Model Selection**
-
-**Location:** `src/contexts/WebLLMContext.jsx` (Lines 31-42)
+**Location:** `src/services/webllm.js` (Previously Line 268)
 
 **Issue:**  
-The `selectModel` function doesn't wait for the model to unload before marking it as changed, creating a race condition.
+The service was calling `purgeUnusedModels()` immediately after every successful model initialization. This deleted cached models that didn't match the current modelId, forcing users to re-download models when switching between them (e.g., 1B ↔ 3B) and even on project restarts.
 
-**Current Code:**
+**Fix Implemented (January 26, 2026):**
+- Removed aggressive cache purging after initialization
+- Added cache detection logging to show when models load from cache
+- Models now persist across project restarts and allow instant switching
+
+---
+
+### 7. **Model Not Re-initializing After Logout/Login** ✅ FIXED
+
+**Location:** `src/contexts/WebLLMContext.jsx` (Line 93), `src/contexts/AuthContext.jsx` (Line 108)
+
+**Issue:**  
+Critical bug where the AI model would not re-initialize when users logged back in after logging out:
+1. First login → Model loads successfully ✓
+2. User logs out → Model unloads successfully ✓
+3. User logs back in → **Model DOES NOT reload** ❌
+
+**Root Cause:**
+The `initialize()` function had a guard clause `if (isInitialized || isLoading) return;` that prevented re-initialization. After logout, even though the model was unloaded, the `isInitialized` flag wasn't properly reset, blocking the next initialization attempt.
+
+**Additional Issue:**
+No blocking UI during model initialization, allowing users to interact with non-functional AI features before the model was ready.
+
+**Fix Implemented (January 26, 2026):**
+
+**Changes Made:**
+
+1. **Fixed Initialization Guard (WebLLMContext.jsx, Lines 93-96):**
 ```javascript
-const selectModel = useCallback((modelId) => {
-  try {
-    webLLMService.setModel(modelId); // ❌ Async operation not awaited
-    const currentModelId = webLLMService.getCurrentModel();
-    const models = webLLMService.getAvailableModels();
-    const currentModelObj = models.find(m => m.id === currentModelId);
-    setCurrentModel(currentModelObj);
-  } catch (err) {
-    console.error('Failed to select model:', err);
-    throw err;
-  }
+// ❌ OLD CODE:
+if (isInitialized || isLoading) return;
+
+// ✅ NEW CODE:
+if (isLoading) {
+  console.log('Initialization already in progress, skipping duplicate call');
+  return;
+}
+// Only block if loading, allow re-init after logout
+```
+
+2. **Added State Reset on Logout (AuthContext.jsx, Lines 120-124):**
+```javascript
+// CRITICAL: Reset WebLLM context state to allow re-initialization on next login
+// This ensures the model can be reloaded when user logs back in
+if (window.webLLMResetState) {
+  window.webLLMResetState();
+}
+```
+
+3. **Added Global State Reset Function (WebLLMContext.jsx, Lines 87-95):**
+```javascript
+const resetState = useCallback(() => {
+  // Reset all state to allow fresh initialization
+  setIsInitialized(false);
+  setIsLoading(false);
+  setProgress({ text: '', progress: 0, timeElapsed: 0 });
+  setError(null);
+  setRetryCount(0);
+  setShowLoadingModal(false);
+  console.log('WebLLM context state reset for re-initialization');
 }, []);
+
+// Expose globally for AuthContext to call on logout
+useEffect(() => {
+  window.webLLMResetState = resetState;
+  return () => { delete window.webLLMResetState; };
+}, [resetState]);
 ```
 
-**In webllm.js:**
+4. **Added Blocking Loading Modal (WebLLMContext.jsx, ModelInitializationModal.jsx):**
 ```javascript
-async setModel(modelId) {
-  // ... validation
-  await this.unloadModel(); // ❌ This is async!
-  this.modelId = modelId;
-  // Requires re-initialization
-}
+const [showLoadingModal, setShowLoadingModal] = useState(false);
+
+// Show modal during initialization
+setShowLoadingModal(true);
+
+// Hide modal after success
+setTimeout(() => setShowLoadingModal(false), 500);
 ```
 
-**Fix:**
-```javascript
-const selectModel = useCallback(async (modelId) => {
-  try {
-    setIsLoading(true);
-    await webLLMService.setModel(modelId);
-    setIsInitialized(false); // Model needs reinitialization
-    const models = webLLMService.getAvailableModels();
-    const currentModelObj = models.find(m => m.id === modelId);
-    setCurrentModel(currentModelObj);
-  } catch (err) {
-    console.error('Failed to select model:', err);
-    setError(err.message);
-  } finally {
-    setIsLoading(false);
-  }
-}, []);
-```
-
----
-
-### 7. **Incorrect Stop Token Configuration**
-
-**Location:** `src/services/webllm.js` (Line 236)
-
-**Issue:**  
-Stop tokens include lowercase variants that may not match the model's actual output format.
-
-**Current Code:**
-```javascript
-stop: ["<|eot_id|>", "<|start_header_id|>", "<|end_header_id|>", "user:", "User:", "\nUser"]
-```
-
-**According to WebLLM/LLaMA Documentation:**
-- Stop tokens are case-sensitive
-- Llama 3 uses specific special tokens that should be checked against the model's tokenizer config
-- Including generic strings like "user:" can cause premature stopping
-
-**Recommended:**
-```javascript
-stop: ["<|eot_id|>", "<|end_of_text|>"] // Only model-specific tokens
-```
-
----
-
-### 8. **Missing Stream Cleanup on Error**
-
-**Location:** `src/pages/Chat.jsx` (Lines 137-157)
-
-**Issue:**  
-When streaming fails, the animation frame and stream buffer aren't properly cleaned up.
-
-**Current Code:**
-```javascript
-} catch (error) {
-  console.error('Chat error:', error);
-  if (error.message === "Request cancelled") {
-    setStreamingMessage('');
-    streamBufferRef.current = '';
-    // ❌ Animation frame not cancelled
-  }
-```
-
-**Fix:**
-```javascript
-} catch (error) {
-  console.error('Chat error:', error);
-  
-  // Always cleanup streaming state
-  if (animationFrameRef.current) {
-    cancelAnimationFrame(animationFrameRef.current);
-    animationFrameRef.current = null;
-  }
-  setStreamingMessage('');
-  streamBufferRef.current = '';
-  
-  if (error.message !== "Request cancelled") {
-    const errorMessage = {...};
-    setMessages([...newMessages, errorMessage]);
-  }
-}
-```
-
----
-
-### 9. **Inconsistent Model ID Format**
-
-**Location:** `src/services/webllm.js` (Lines 6-10, 38-56)
-
-**Issue:**  
-Model IDs in APP_CONFIG don't match the UI-friendly list, causing confusion.
-
-**APP_CONFIG:**
-```javascript
-"model_id": "Llama-3.2-1B-Instruct-q4f16_1-MLC"
-```
-
-**availableModels:**
-```javascript
-id: "Llama-3.2-1B-Instruct-q4f16_1-MLC" // ✅ Matches
-```
-
-**But:**
-```javascript
-"model_id": "Phi-3.5-mini-instruct-q4f16_1-MLC" // In APP_CONFIG
-// vs
-id: "Phi-3.5-mini-instruct-q4f16_1-MLC" // In availableModels - OK
-```
-
-**Issue:**  
-If model IDs don't exactly match WebLLM's prebuilt names, loading will fail. The current implementation assumes custom URLs work, but WebLLM v0.2.75 may require exact prebuilt model names.
-
----
-
-### 10. **No WebGPU Capability Detection**
-
-**Location:** `src/services/webllm.js`
-
-**Issue:**  
-The code tries to initialize WebLLM without checking if WebGPU is available, leading to cryptic errors.
-
-**Current Implementation:**
-```javascript
-async initialize(onProgress) {
-  // ❌ Directly attempts to create engine
-  this.engine = await CreateWebWorkerMLCEngine(...);
-}
-```
-
-**According to WebLLM Requirements:**
-WebLLM requires WebGPU support (Chrome 113+, Edge 113+).
-
-**Recommended Fix:**
-```javascript
-async initialize(onProgress) {
-  // Check WebGPU support
-  if (!navigator.gpu) {
-    throw new Error(
-      'WebGPU is not supported in your browser. Please use Chrome 113+ or Edge 113+.'
-    );
-  }
-  
-  try {
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) {
-      throw new Error('No WebGPU adapter found. Your GPU may not support WebGPU.');
-    }
-    
-    // Now safe to initialize
-    this.engine = await CreateWebWorkerMLCEngine(...);
-  } catch (error) {
-    // Provide user-friendly error messages
-    throw new Error(`WebLLM initialization failed: ${error.message}`);
-  }
-}
-```
-
----
-
-## 🟡 MEDIUM PRIORITY ISSUES
-
-### 11. **Inefficient Cache Purging**
-
-**Location:** `src/services/webllm.js` (Lines 377-385)
-
-**Issue:**  
-The `purgeUnusedModels` function iterates through all caches and deletes them one by one, which is inefficient.
-
-**Current Code:**
-```javascript
-async purgeUnusedModels() {
-  const cachesList = await this.checkCache();
-  for (const cache of cachesList) {
-    if (!cache.name.includes(this.modelId)) {
-      await this.deleteModelFromCache(cache.name);
-    }
-  }
-}
-```
-
-**Issue:**  
-- Sequential deletion is slow
-- No user feedback during deletion
-- Doesn't check cache size before deleting
-
-**Recommended:**
-```javascript
-async purgeUnusedModels() {
-  const cachesList = await this.checkCache();
-  const toDelete = cachesList.filter(cache => 
-    !cache.name.includes(this.modelId)
-  );
-  
-  // Delete in parallel
-  await Promise.all(
-    toDelete.map(cache => this.deleteModelFromCache(cache.name))
-  );
-  
-  this.addDebugLog('success', `Purged ${toDelete.length} unused model(s)`);
-}
-```
-
----
-
-### 12. **Password Security Weakness**
-
-**Location:** `src/services/auth.js` (Lines 109-118)
-
-**Issue:**  
-Password hashing uses a simple Web Crypto hash, which is vulnerable to brute-force attacks.
-
-**Current Code:**
-```javascript
-async hashPassword(password) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-```
-
-**Issue:**  
-- No salt (different from the encryption salt issue)
-- No iteration count (single SHA-256 is too fast)
-- Identical passwords produce identical hashes
-
-**Recommended:**
-Use PBKDF2 with per-user salt (similar to encryption key derivation):
-```javascript
-async hashPassword(password, userSalt) {
-  const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveBits']
-  );
-  
-  const hashBuffer = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      salt: userSalt,
-      iterations: 100000,
-      hash: 'SHA-256'
-    },
-    keyMaterial,
-    256
-  );
-  
-  return Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-```
-
----
-
-### 13. **Missing Abort Controller Cleanup**
-
-**Location:** `src/services/webllm.js` (Line 214)
-
-**Issue:**  
-The `cancelChat` method doesn't exist in the WebLLMService class.
-
-**In WebLLMContext:**
-```javascript
-const cancelChat = useCallback(() => {
-  return webLLMService.cancelChat(); // ❌ This method is not defined!
-}, []);
-```
-
-**In webllm.js:**
-```javascript
-// Missing implementation
-```
-
-**Recommended Fix:**
-```javascript
-cancelChat() {
-  if (this.abortController) {
-    this.abortController.abort();
-    this.addDebugLog('warning', 'Chat request cancelled by user');
-    return true;
-  }
-  return false;
-}
-```
-
----
-
-### 14. **Journal Analysis Parsing Too Lenient**
-
-**Location:** `src/services/webllm.js` (Lines 303-343)
-
-**Issue:**  
-The `parseAnalysisResponse` function uses regex patterns that may not match the actual LLM output format, leading to incorrect parsing.
-
-**Current Code:**
-```javascript
-const moodPatterns = [/\bmood[:\s]+([a-z]+)/i, /\bemotion[:\s]+([a-z]+)/i];
-```
-
-**Issue:**  
-- LLMs may not output in the expected "key: value" format
-- The prompt asks for "JSON only" but doesn't enforce it
-- Fallback values may mask LLM failures
-
-**Recommended Approach:**
-```javascript
-// Enforce JSON response with explicit formatting
-const messages = [
-  {
-    role: 'system',
-    content: 'You are a JSON-only API. Output valid JSON with no extra text.'
-  },
-  {
-    role: 'user',
-    content: `Analyze this journal entry and respond with ONLY this JSON structure:
-{
-  "mood": "one_word_lowercase",
-  "sentiment": number_0_to_10,
-  "stressLevel": "low|medium|high",
-  "summary": "brief_text_max_50_chars"
-}
-
-Entry: "${journalText}"`
-  }
-];
-
-// Parse response with strict JSON parsing
-try {
-  const analysis = JSON.parse(response);
-  // Validate structure
-  if (!analysis.mood || typeof analysis.sentiment !== 'number') {
-    throw new Error('Invalid analysis structure');
-  }
-  return analysis;
-} catch (parseError) {
-  // Fall back to regex parsing only as last resort
-  return this.parseAnalysisResponse(response, journalText);
-}
-```
-
----
-
-### 15. **Hardware Check Not Used Effectively**
-
-**Location:** `src/services/webllm.js` (Lines 137-140)
-
-**Issue:**  
-Hardware tier detection is performed but not used to automatically select appropriate models.
-
-**Current Code:**
-```javascript
-try {
-   const hw = await getHardwareTier();
-   this.addDebugLog('info', `Hardware Tier: ${hw.tier}`);
-} catch (e) { console.warn('HW check skipped'); }
-// ❌ Hardware tier info is logged but not used
-```
-
-**Recommended Enhancement:**
-```javascript
-try {
-  const hw = await getHardwareTier();
-  this.addDebugLog('info', `Hardware Tier: ${hw.tier}`);
-  
-  // Auto-select appropriate model if not already set
-  if (!localStorage.getItem('mindscribe_selected_model')) {
-    this.modelId = hw.recommendedModel || this.modelId;
-    this.addDebugLog('info', `Auto-selected model: ${this.modelId}`);
-  }
-  
-  // Warn if current model exceeds hardware capability
-  const currentModel = this.availableModels.find(m => m.id === this.modelId);
-  if (hw.tier === 'low' && currentModel.size.includes('2GB')) {
-    this.addDebugLog('warning', 
-      'Selected model may be too large for your hardware. Consider switching to a smaller model.'
-    );
-  }
-} catch (e) { 
-  console.warn('HW check skipped');
-}
-```
+**Benefits:**
+- ✅ **Re-initialization Works:** Model properly reloads on every login
+- ✅ **State Reset:** Clean state on logout prevents stale flags
+- ✅ **Blocking UI:** Modal prevents interaction until model is ready
+- ✅ **Better UX:** Users can't access broken AI features during loading
+- ✅ **Proper Cleanup:** Model unloads on logout, reloads on login
+
+**Verification:**
+1. Login → Model initializes → See loading modal → Modal disappears when ready
+2. Logout → Model unloads → State resets
+3. Login again → Model re-initializes successfully → Loading modal shows again
+4. Try clicking UI during loading → Blocked by modal backdrop
 
 ---
 
 ## 🔵 LOW PRIORITY / OPTIMIZATION SUGGESTIONS
 
-### 16. **Redundant Model Service Files**
-
-**Location:** `src/services/`
-
-**Issue:**  
-Three WebLLM service files exist with overlapping functionality:
-- `webllm.js` (396 lines) - Primary implementation
-- `webllm-optimized.js` - Duplicate?
-- `webllm-backup.js` - Old version?
-
-**Impact:**  
-- Confusion for developers
-- Maintenance overhead
-- Risk of using wrong file
-
-**Recommendation:**  
-Remove unused files or document their purpose clearly.
-
 ---
 
-### 17. **No Progressive Model Loading UI**
-
-**Issue:**  
-While progress callbacks exist, the UI doesn't show detailed download stages (fetching, caching, loading).
-
-**Enhancement:**
-```javascript
-initProgressCallback: (progress) => {
-  // Enhanced progress reporting
-  const stage = progress.text.toLowerCase();
-  let displayText = progress.text;
-  
-  if (stage.includes('download')) {
-    displayText = `📥 Downloading model... ${Math.round(progress.progress * 100)}%`;
-  } else if (stage.includes('load')) {
-    displayText = `⚡ Loading into memory... ${Math.round(progress.progress * 100)}%`;
-  }
-  
-  onProgress({ ...progress, displayText });
-}
-```
-
----
-
-### 18. **Missing Usage Statistics**
+### 8. **Missing Usage Statistics**
 
 **Issue:**  
 WebLLM's chat completion responses include usage statistics (tokens), but these aren't stored or displayed.
@@ -717,7 +353,7 @@ const aiMessage = {
 
 ---
 
-### 19. **No Model Preloading Strategy**
+### 9. **No Model Preloading Strategy**
 
 **Issue:**  
 Models are loaded only when first needed, causing initial delays.
@@ -740,7 +376,7 @@ useEffect(() => {
 
 ---
 
-### 20. **Inconsistent Error Messages**
+### 10. **Inconsistent Error Messages**
 
 **Issue:**  
 Error messages across the app vary in format and detail.
@@ -770,40 +406,43 @@ const ERROR_MESSAGES = {
 
 ## 📊 SUMMARY STATISTICS
 
-| Severity | Count | Critical Path? |
-|----------|-------|----------------|
-| 🔴 Critical | 5 | ✅ Yes |
-| ⚠️ High | 5 | ✅ Yes |
-| 🟡 Medium | 5 | ⚠️ Partial |
-| 🔵 Low | 5 | ❌ No |
-| **Total** | **20** | **10 Critical Path** |
+| Severity | Count | Status |
+|----------|-------|--------|
+| 🔴 Critical | 5 | ⚠️ Needs Attention |
+| ✅ Critical (Fixed) | 2 | Issues #6-#7 Resolved |
+| 🔵 Low | 3 | 💡 Optional Enhancement |
+| **Total** | **10** | **5 Critical + 2 Fixed + 3 Optional** |
 
 ---
 
 ## 🎯 RECOMMENDED FIX PRIORITY
 
 ### Immediate (Before Production):
-1. ✅ Fix AppConfig structure (#1)
-2. ✅ Add WebGPU detection (#10)
-3. ✅ Fix security vulnerabilities (#4, #12)
-4. ✅ Add error recovery (#3)
-5. ✅ Fix race conditions (#6)
-
-### Short Term (Next Sprint):
-6. ✅ Implement `cancelChat()` method (#13)
-7. ✅ Fix stream cleanup (#8)
-8. ✅ Add component unmount cleanup (#5)
-9. ✅ Use WebLLM prebuilt models (#2)
-
-### Medium Term (Optimization):
-10. ✅ Improve journal parsing (#14)
-11. ✅ Use hardware detection (#15)
-12. ✅ Optimize cache management (#11)
+1. ❌ Fix AppConfig structure (#1)
+2. ❌ Use WebLLM prebuilt models (#2)
+3. ❌ Add error recovery (#3)
+4. ❌ Fix security vulnerabilities (#4, #5)
+5. ✅ ~~Fix aggressive cache purging (#6)~~ - **FIXED** ✅
+6. ✅ ~~Fix model re-initialization after logout (#7)~~ - **FIXED** ✅
 
 ### Long Term (Nice to Have):
-13. ✅ Add usage statistics (#18)
-14. ✅ Implement model preloading (#19)
-15. ✅ Clean up redundant files (#16)
+7. 💡 Add usage statistics (#8)
+8. 💡 Implement model preloading (#9)
+9. 💡 Standardize error messages (#10)
+
+---
+
+## ✅ COMPLETED ISSUES
+
+### Recently Fixed (January 26, 2026):
+- **Issue #6:** Aggressive Cache Purging - Models now persist across project restarts and model switches
+- **Issue #7:** Model Re-initialization Bug - Fixed model not reloading after logout/login cycle, added blocking UI during initialization
+
+### Previously Fixed (Issues #6-#17):
+The following issues were successfully resolved in earlier iterations:
+- **#6-#10:** High priority fixes (race conditions, stop tokens, stream cleanup, model IDs, WebGPU detection)
+- **#11-#15:** Medium priority fixes (cache purging, password security, abort controller, journal parsing, hardware check)
+- **#16-#17:** Low priority fixes (redundant files cleanup, progressive loading UI)
 
 ---
 

@@ -20,6 +20,7 @@ export const WebLLMProvider = ({ children }) => {
   const [availableModels, setAvailableModels] = useState([]);
   const [currentModel, setCurrentModel] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [showLoadingModal, setShowLoadingModal] = useState(false);
 
   // Load available models on mount
   React.useEffect(() => {
@@ -80,22 +81,41 @@ export const WebLLMProvider = ({ children }) => {
       setIsLoading(false);
       setProgress({ text: '', progress: 0 });
       setError(null);
+      setShowLoadingModal(false);
       console.log('WebLLM context cleaned up');
     } catch (err) {
       console.error('Cleanup error:', err);
     }
   }, []);
 
+  const resetState = useCallback(() => {
+    // Reset all state to allow fresh initialization
+    setIsInitialized(false);
+    setIsLoading(false);
+    setProgress({ text: '', progress: 0, timeElapsed: 0 });
+    setError(null);
+    setRetryCount(0);
+    setShowLoadingModal(false);
+    console.log('WebLLM context state reset for re-initialization');
+  }, []);
+
   const initialize = useCallback(async (isRetry = false) => {
-    if (isInitialized || isLoading) return;
+    // CRITICAL FIX: Allow re-initialization after logout by checking only isLoading
+    // Don't block if isInitialized is true - user might have logged out and back in
+    if (isLoading) {
+      console.log('Initialization already in progress, skipping duplicate call');
+      return;
+    }
 
     setIsLoading(true);
+    setShowLoadingModal(true); // Show blocking modal during initialization
     setError(null);
 
     try {
       // Cleanup before retry to prevent cache corruption
-      if (isRetry) {
+      if (isRetry || isInitialized) {
         await webLLMService.unloadModel().catch(() => {});
+        setIsInitialized(false);
       }
 
       await webLLMService.initialize((progressReport) => {
@@ -109,7 +129,10 @@ export const WebLLMProvider = ({ children }) => {
 
       setIsInitialized(true);
       setRetryCount(0); // Reset retry counter on success
-      setProgress({ text: 'Model ready!', progress: 1 });
+      setProgress({ text: 'Model ready!', progress: 1, timeElapsed: 0 });
+      
+      // Hide modal after successful initialization
+      setTimeout(() => setShowLoadingModal(false), 500);
     } catch (err) {
       console.error('WebLLM initialization failed:', err);
       
@@ -137,11 +160,12 @@ export const WebLLMProvider = ({ children }) => {
           isAutoRetrying: false,
           suggestion: 'Please check your internet connection and GPU availability, then try again.'
         });
+        setShowLoadingModal(false); // Hide modal on final failure to allow retry button access
       }
     } finally {
       setIsLoading(false);
     }
-  }, [isInitialized, isLoading, retryCount]);
+  }, [isLoading, isInitialized, retryCount]);
 
   const chat = useCallback(async (message, history = [], onStream = null) => {
     if (!isInitialized) {
@@ -185,6 +209,14 @@ export const WebLLMProvider = ({ children }) => {
     setWebLLMInitialize(initialize);
   }, [initialize]);
 
+  // Expose resetState globally for AuthContext to call on logout
+  useEffect(() => {
+    window.webLLMResetState = resetState;
+    return () => {
+      delete window.webLLMResetState;
+    };
+  }, [resetState]);
+
   // CRITICAL FIX: Don't cleanup on unmount - WebLLMProvider should persist throughout app lifecycle
   // The provider wraps the entire app in App.jsx, so unmount = app closing
   // Aggressive cleanup causes "Module has already been disposed" errors during navigation
@@ -206,7 +238,8 @@ export const WebLLMProvider = ({ children }) => {
     generateRecommendations,
     generateReport,
     cancelChat,
-    retryInitialization
+    retryInitialization,
+    showLoadingModal
   };
 
   return <WebLLMContext.Provider value={value}>{children}</WebLLMContext.Provider>;

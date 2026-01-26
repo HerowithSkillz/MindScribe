@@ -121,6 +121,12 @@ export const AuthProvider = ({ children }) => {
     chatStorage.encryptionKey = null;
     analysisStorage.encryptionKey = null;
     assessmentStorage.encryptionKey = null;
+    
+    // CRITICAL: Reset WebLLM context state to allow re-initialization on next login
+    // This ensures the model can be reloaded when user logs back in
+    if (window.webLLMResetState) {
+      window.webLLMResetState();
+    }
   };
 
   const saveDASS21Results = async (results) => {
