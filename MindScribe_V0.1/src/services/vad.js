@@ -18,9 +18,9 @@ class VoiceActivityDetector {
     this.session = null;
     this.isInitialized = false;
     
-    // VAD model configuration (using raw GitHub release for reliability)
+    // VAD model configuration (using local model for offline capability)
     // Silero VAD v5.0 - smaller and faster than v6
-    this.modelUrl = 'https://github.com/snakers4/silero-vad/raw/v5.0/files/silero_vad.onnx';
+    this.modelUrl = '/models/vad/silero_vad.onnx';
     this.modelCacheName = 'mindscribe-vad-models';
     
     // Audio processing configuration

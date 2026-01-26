@@ -451,18 +451,16 @@ export const VoiceProvider = ({ children }) => {
     return (Date.now() - sessionStartTimeRef.current) / 1000;
   }, [sessionActive]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount only
   useEffect(() => {
     return () => {
       // Cleanup resources when component unmounts
-      if (sessionActive) {
-        endSession();
-      }
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current);
       }
+      // Note: endSession not called here to prevent premature cleanup
     };
-  }, [sessionActive, endSession]);
+  }, []);
 
   const value = {
     // State

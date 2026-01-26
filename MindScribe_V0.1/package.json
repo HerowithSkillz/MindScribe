@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.75",
+    "@remotion/whisper-web": "^4.0.409",
     "dompurify": "^3.3.1",
     "framer-motion": "^11.0.0",
     "jspdf": "^4.0.0",

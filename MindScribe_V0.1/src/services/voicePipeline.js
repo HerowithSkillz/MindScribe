@@ -107,11 +107,12 @@ class VoicePipeline {
           this.lastProcessingTime.vad = performance.now() - vadStart;
         }
       }
-
-      // Step 1: Speech-to-Text (Whisper)
-      console.log('🎤 Step 1: Transcribing speech...');
-      const sttStart = performance.now();
-      const transcript = await whisperService.transcribe(processedAudio
+  /**
+   * Process voice input through complete pipeline
+   * @param {Float32Array} audioData - Raw audio data
+   * @param {Object} options - Processing options
+   * @returns {Promise<Object>} - Processing result
+   */
   async processVoiceInput(audioData, options = {}) {
     if (this.isProcessing) {
       console.warn('⚠️ Already processing voice input');
@@ -144,13 +145,8 @@ class VoicePipeline {
       // Get conversation history for context (last 3 exchanges)
       const contextHistory = this.conversationHistory.slice(-6); // 3 user + 3 AI messages
       
-      const aiResponse = await webLLMService.chat(
-      
-      if (this.useVAD) {
-        console.log(`📊 Breakdown: VAD=${this.lastProcessingTime.vad.toFixed(0)}ms, STT=${this.lastProcessingTime.stt.toFixed(0)}ms, LLM=${this.lastProcessingTime.llm.toFixed(0)}ms, TTS=${this.lastProcessingTime.tts.toFixed(0)}ms`);
-      } else {
-        console.log(`📊 Breakdown: STT=${this.lastProcessingTime.stt.toFixed(0)}ms, LLM=${this.lastProcessingTime.llm.toFixed(0)}ms, TTS=${this.lastProcessingTime.tts.toFixed(0)}ms`);
-      }
+      const llmResult = await webLLMService.chat(
+        transcript,
         contextHistory,
         null,
         {
@@ -158,6 +154,9 @@ class VoicePipeline {
           temperature: 0.8 // Slightly more conversational
         }
       );
+      
+      // Extract text content from WebLLM response object
+      const aiResponse = typeof llmResult === 'string' ? llmResult : llmResult.content;
       this.lastProcessingTime.llm = performance.now() - llmStart;
       console.log(`✅ AI Response: "${aiResponse}" (${this.lastProcessingTime.llm.toFixed(0)}ms)`);
 
@@ -172,7 +171,7 @@ class VoicePipeline {
 
       // Step 4: Play audio
       console.log('🔊 Step 4: Playing audio response...');
-      await this.playAudio(audioOutput);
+      await this.playAudio(audioOutput.audioData);
 
       // Update conversation history
       this.conversationHistory.push(

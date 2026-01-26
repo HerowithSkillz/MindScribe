@@ -1,27 +1,26 @@
 /**
  * Whisper.cpp Service - Speech-to-Text using WebAssembly
  * 
- * Based on official Whisper.cpp WASM implementation:
- * https://github.com/ggml-org/whisper.cpp/tree/master/examples/whisper.wasm
- * 
+ * Uses @remotion/whisper-web for production-ready speech recognition
  * Provides offline speech recognition using Whisper models running in browser.
+ * 
+ * Note: Runs in main thread (not worker) as @remotion/whisper-web requires window object
  */
+
+import { transcribe, downloadWhisperModel } from '@remotion/whisper-web';
 
 class WhisperService {
   constructor() {
-    this.worker = null;
     this.isInitialized = false;
     this.isLoading = false;
     this.currentModel = null;
-    this.instance = null;
     
-    // Available Whisper models from HuggingFace
+    // Available Whisper models
     this.availableModels = [
       {
         id: 'tiny.en',
         name: 'Tiny English',
         size: '75MB',
-        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin',
         ramUsage: '273MB',
         speed: '32x realtime',
         description: 'Fastest model, best for development and testing'
@@ -30,7 +29,6 @@ class WhisperService {
         id: 'base.en',
         name: 'Base English',
         size: '142MB',
-        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
         ramUsage: '388MB',
         speed: '16x realtime',
         description: 'Balanced performance, recommended for production'
@@ -39,7 +37,6 @@ class WhisperService {
         id: 'small.en',
         name: 'Small English',
         size: '466MB',
-        url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
         ramUsage: '852MB',
         speed: '6x realtime',
         description: 'High quality, slower performance'
@@ -50,11 +47,12 @@ class WhisperService {
   }
 
   /**
-   * Load Whisper model - downloads and caches in browser Cache API
+   * Load Whisper model
    * @param {string} modelId - Model ID to load (tiny.en, base.en, small.en)
+   * @param {Function} onProgress - Progress callback
    * @returns {Promise<void>}
    */
-  async loadModel(modelId = 'base.en') {
+  async loadModel(modelId = 'base.en', onProgress = null) {
     if (this.isLoading) {
       throw new Error('Model is already loading');
     }
@@ -75,20 +73,17 @@ class WhisperService {
 
       console.log(`📥 Loading Whisper model: ${modelInfo.name} (${modelInfo.size})`);
 
-      // Check cache first
-      const cached = await this.checkCache(modelId);
-      let modelData;
-
-      if (cached) {
-        console.log(`✅ Found cached Whisper model: ${modelId}`);
-        modelData = cached;
-      } else {
-        console.log(`⬇️ Downloading Whisper model from ${modelInfo.url}`);
-        modelData = await this.downloadModel(modelInfo.url, modelId);
-      }
-
-      // Initialize worker with model
-      await this.initializeWorker(modelData, modelId);
+      // Download model using @remotion/whisper-web
+      // Runs in main thread (package requires window object)
+      await downloadWhisperModel({
+        model: modelId,
+        onProgress: ({ progress, loaded, total }) => {
+          console.log(`[Whisper] Download progress: ${Math.round(progress * 100)}%`);
+          if (onProgress) {
+            onProgress({ progress, loaded, total });
+          }
+        }
+      });
 
       this.currentModel = modelId;
       this.isInitialized = true;
@@ -103,151 +98,7 @@ class WhisperService {
     }
   }
 
-  /**
-   * Check if model exists in browser cache
-   * @param {string} modelId - Model ID to check
-   * @returns {Promise<ArrayBuffer|null>}
-   */
-  async checkCache(modelId) {
-    try {
-      const cacheName = 'mindscribe-whisper-models';
-      const cache = await caches.open(cacheName);
-      const cacheKey = `whisper-model-${modelId}`;
-      const cached = await cache.match(cacheKey);
-      
-      if (cached) {
-        return await cached.arrayBuffer();
-      }
-      return null;
-    } catch (error) {
-      console.warn('Cache check failed:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Download model from URL with progress tracking
-   * @param {string} url - Model URL
-   * @param {string} modelId - Model ID for caching
-   * @returns {Promise<ArrayBuffer>}
-   */
-  async downloadModel(url, modelId) {
-    const response = await fetch(url);
-    
-    if (!response.ok) {
-      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-    }
-
-    const contentLength = response.headers.get('content-length');
-    const total = parseInt(contentLength, 10);
-    let loaded = 0;
-
-    const reader = response.body.getReader();
-    const chunks = [];
-
-    while (true) {
-      const { done, value } = await reader.read();
-      
-      if (done) break;
-      
-      chunks.push(value);
-      loaded += value.length;
-
-      const progress = (loaded / total) * 100;
-      console.log(`📊 Download progress: ${progress.toFixed(1)}%`);
-      
-      // Emit progress event (can be used by UI)
-      this.emitProgress({ loaded, total, progress });
-    }
-
-    // Combine chunks into single ArrayBuffer
-    const modelData = new Uint8Array(loaded);
-    let position = 0;
-    for (const chunk of chunks) {
-      modelData.set(chunk, position);
-      position += chunk.length;
-    }
-
-    // Cache the model
-    await this.cacheModel(modelId, modelData.buffer);
-
-    return modelData.buffer;
-  }
-
-  /**
-   * Cache model in browser Cache API
-   * @param {string} modelId - Model ID
-   * @param {ArrayBuffer} data - Model data
-   */
-  async cacheModel(modelId, data) {
-    try {
-      const cacheName = 'mindscribe-whisper-models';
-      const cache = await caches.open(cacheName);
-      const cacheKey = `whisper-model-${modelId}`;
-      
-      const response = new Response(data, {
-        headers: {
-          'Content-Type': 'application/octet-stream',
-          'Content-Length': data.byteLength.toString()
-        }
-      });
-      
-      await cache.put(cacheKey, response);
-      console.log(`💾 Cached Whisper model: ${modelId} (${(data.byteLength / 1024 / 1024).toFixed(1)} MB)`);
-    } catch (error) {
-      console.warn('Failed to cache model:', error);
-    }
-  }
-
-  /**
-   * Initialize Whisper worker with model data
-   * @param {ArrayBuffer} modelData - Model binary data
-   * @param {string} modelId - Model ID
-   */
-  async initializeWorker(modelData, modelId) {
-    // Terminate existing worker if any
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
-
-    // Create new worker
-    this.worker = new Worker(new URL('../workers/whisper.worker.js', import.meta.url), {
-      type: 'module'
-    });
-
-    // Setup message handler
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Worker initialization timeout'));
-      }, 60000); // 60 second timeout
-
-      this.worker.onmessage = (event) => {
-        const { type, data, error } = event.data;
-
-        if (type === 'initialized') {
-          clearTimeout(timeout);
-          console.log('✅ Whisper worker initialized');
-          resolve();
-        } else if (type === 'error') {
-          clearTimeout(timeout);
-          reject(new Error(error));
-        }
-      };
-
-      this.worker.onerror = (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      };
-
-      // Send model to worker
-      this.worker.postMessage({
-        type: 'init',
-        modelData,
-        modelId
-      });
-    });
-  }
+  // Worker methods removed - @remotion/whisper-web runs in main thread
 
   /**
    * Transcribe audio using Whisper
@@ -264,53 +115,64 @@ class WhisperService {
       throw new Error('No audio data provided');
     }
 
-    console.log(`🎤 Transcribing audio (${audioData.length} samples, ${(audioData.length / 16000).toFixed(1)}s)`);
+    const {
+      language = 'en',
+      onProgress = null
+    } = options;
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Transcription timeout'));
-      }, 30000); // 30 second timeout
+    try {
+      console.log(`[Whisper] Transcribing ${audioData.length} audio samples`);
 
-      const messageHandler = (event) => {
-        const { type, text, error } = event.data;
+      // Ensure audioData is Float32Array
+      const channelWaveform = audioData instanceof Float32Array 
+        ? audioData 
+        : new Float32Array(audioData);
 
-        if (type === 'transcription') {
-          clearTimeout(timeout);
-          this.worker.removeEventListener('message', messageHandler);
-          console.log('✅ Transcription complete:', text);
-          resolve(text);
-        } else if (type === 'error') {
-          clearTimeout(timeout);
-          this.worker.removeEventListener('message', messageHandler);
-          reject(new Error(error));
+      // Transcribe using @remotion/whisper-web (runs in main thread)
+      const result = await transcribe({
+        channelWaveform,
+        model: this.currentModel,
+        language: language === 'en' ? 'en' : 'auto',
+        onProgress: (progress) => {
+          console.log(`[Whisper] Transcription progress: ${Math.round(progress * 100)}%`);
+          if (onProgress) {
+            onProgress(progress);
+          }
         }
-      };
-
-      this.worker.addEventListener('message', messageHandler);
-
-      // Send audio to worker
-      this.worker.postMessage({
-        type: 'transcribe',
-        audioData,
-        language: options.language || 'en',
-        translate: options.translate || false
       });
-    });
+
+      // Extract text from result (handle different response formats)
+      let transcription = '';
+      if (result.chunks && Array.isArray(result.chunks)) {
+        transcription = result.chunks.map(chunk => chunk.text).join(' ').trim();
+      } else if (result.transcription && Array.isArray(result.transcription)) {
+        transcription = result.transcription.map(item => item.text).join(' ').trim();
+      } else if (typeof result === 'string') {
+        transcription = result.trim();
+      } else if (result.text) {
+        transcription = result.text.trim();
+      } else {
+        console.error('[Whisper] Unexpected result format:', result);
+        throw new Error('Unexpected transcription result format');
+      }
+      
+      console.log('[Whisper] ✅ Transcription complete:', transcription);
+      return transcription;
+
+    } catch (error) {
+      console.error('[Whisper] ❌ Transcription failed:', error);
+      throw error;
+    }
   }
 
   /**
    * Unload Whisper model and cleanup
    */
   async unloadModel() {
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
-
+    // No worker to terminate - model stays cached in browser
     this.isInitialized = false;
     this.currentModel = null;
-    this.instance = null;
-    console.log('🗑️ Whisper model unloaded');
+    console.log('✅ Whisper unloaded (model remains cached)');
   }
 
   /**

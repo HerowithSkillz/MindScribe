@@ -48,7 +48,7 @@ class PiperService {
   }
 
   /**
-   * Load Piper TTS voice model - downloads and caches in browser Cache API
+   * Load Piper TTS voice model
    * @param {string} voiceId - Voice ID to load
    * @returns {Promise<void>}
    */
@@ -73,28 +73,11 @@ class PiperService {
 
       console.log(`📥 Loading Piper voice: ${voiceInfo.name} (${voiceInfo.size})`);
 
-      // Check cache first
-      const [cachedModel, cachedConfig] = await Promise.all([
-        this.checkCache(voiceId, 'model'),
-        this.checkCache(voiceId, 'config')
-      ]);
+      // Use local model path
+      const modelPath = `/models/piper/${voiceId}.onnx`;
 
-      let modelData, configData;
-
-      if (cachedModel && cachedConfig) {
-        console.log(`✅ Found cached Piper voice: ${voiceId}`);
-        modelData = cachedModel;
-        configData = cachedConfig;
-      } else {
-        console.log(`⬇️ Downloading Piper voice from HuggingFace`);
-        [modelData, configData] = await Promise.all([
-          this.downloadModel(voiceInfo.modelUrl, voiceId, 'model'),
-          this.downloadModel(voiceInfo.configUrl, voiceId, 'config')
-        ]);
-      }
-
-      // Initialize worker with model and config
-      await this.initializeWorker(modelData, configData, voiceId);
+      // Initialize worker with model path
+      await this.initializeWorker(modelPath, voiceId);
 
       this.currentVoice = voiceId;
       this.isInitialized = true;
@@ -229,12 +212,11 @@ class PiperService {
   }
 
   /**
-   * Initialize Piper worker with model and config
-   * @param {ArrayBuffer} modelData - ONNX model data
-   * @param {Object} configData - Voice configuration
+   * Initialize Piper worker with model path
+   * @param {string} modelPath - Path to ONNX model
    * @param {string} voiceId - Voice ID
    */
-  async initializeWorker(modelData, configData, voiceId) {
+  async initializeWorker(modelPath, voiceId) {
     // Terminate existing worker if any
     if (this.worker) {
       this.worker.terminate();
@@ -250,7 +232,7 @@ class PiperService {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Worker initialization timeout'));
-      }, 60000); // 60 second timeout
+      }, 120000); // 120 second timeout
 
       this.worker.onmessage = (event) => {
         const { type, error } = event.data;
@@ -270,11 +252,10 @@ class PiperService {
         reject(error);
       };
 
-      // Send model and config to worker
+      // Send model path to worker
       this.worker.postMessage({
         type: 'init',
-        modelData,
-        configData,
+        modelPath,
         voiceId
       });
     });
@@ -284,14 +265,22 @@ class PiperService {
    * Synthesize speech from text using Piper TTS
    * @param {string} text - Text to synthesize
    * @param {Object} options - Synthesis options
-   * @returns {Promise<Float32Array>} - Audio samples (22.05kHz, mono, float32)
+   * @returns {Promise<Object>} - {audioData: Float32Array, sampleRate: number}
    */
   async synthesize(text, options = {}) {
     if (!this.isInitialized) {
       throw new Error('Piper TTS not initialized. Call loadModel() first.');
     }
 
-    if (!text || text.trim().length === 0) {
+    // Defensive type checking: ensure text is a string
+    if (!text) {
+      throw new Error('No text provided');
+    }
+    if (typeof text !== 'string') {
+      console.error('[Piper] Invalid text type:', typeof text, text);
+      throw new Error(`Text must be a string, got ${typeof text}`);
+    }
+    if (text.trim().length === 0) {
       throw new Error('No text provided');
     }
 
@@ -309,13 +298,14 @@ class PiperService {
       }, 30000); // 30 second timeout
 
       const messageHandler = (event) => {
-        const { type, audio, error } = event.data;
+        const { type, audioData, sampleRate, error } = event.data;
 
         if (type === 'synthesis') {
           clearTimeout(timeout);
           this.worker.removeEventListener('message', messageHandler);
-          console.log(`✅ Synthesis complete: ${audio.length} samples (${(audio.length / 22050).toFixed(1)}s)`);
-          resolve(audio);
+          const duration = (audioData.length / sampleRate).toFixed(1);
+          console.log(`✅ Synthesis complete: ${audioData.length} samples (${duration}s at ${sampleRate}Hz)`);
+          resolve({ audioData: new Float32Array(audioData), sampleRate });
         } else if (type === 'error') {
           clearTimeout(timeout);
           this.worker.removeEventListener('message', messageHandler);
@@ -328,10 +318,7 @@ class PiperService {
       // Send text to worker
       this.worker.postMessage({
         type: 'synthesize',
-        text,
-        speed: options.speed || 1.0,
-        noiseScale: options.noiseScale || 0.667,
-        lengthScale: options.lengthScale || 1.0
+        text
       });
     });
   }
