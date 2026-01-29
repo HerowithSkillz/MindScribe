@@ -330,9 +330,33 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
     this.abortController = new AbortController();
 
     try {
+      // Context Window Management: Prune history if approaching limit
+      // Most models have 4096 token context window
+      // Rough estimate: 1 token ≈ 0.75 words, so 1 message ≈ 10-20 tokens
+      const CONTEXT_WINDOW_SIZE = 4096;
+      const SAFETY_BUFFER = 512; // Reserve for system prompt + response
+      const MAX_HISTORY_TOKENS = CONTEXT_WINDOW_SIZE - SAFETY_BUFFER;
+      
+      // Estimate tokens in conversation history
+      let estimatedTokens = this.systemPrompt.split(/\s+/).length * 1.3; // System prompt
+      estimatedTokens += userMessage.split(/\s+/).length * 1.3; // Current message
+      
+      // Prune old messages if needed (keep recent context)
+      let prunedHistory = [...conversationHistory];
+      for (let i = conversationHistory.length - 1; i >= 0; i--) {
+        const msgTokens = conversationHistory[i].content.split(/\s+/).length * 1.3;
+        if (estimatedTokens + msgTokens > MAX_HISTORY_TOKENS) {
+          // Remove oldest messages to fit within context window
+          prunedHistory = conversationHistory.slice(i + 1);
+          this.addDebugLog('warning', `Pruned ${i + 1} old messages to fit context window`);
+          break;
+        }
+        estimatedTokens += msgTokens;
+      }
+
       const fullMessages = [
         { role: 'system', content: this.systemPrompt },
-        ...conversationHistory,
+        ...prunedHistory,
         { role: 'user', content: userMessage }
       ];
 
@@ -371,10 +395,21 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
       // Issue #18 fix: Return both response and usage statistics
       return { 
         content: fullResponse, 
-        usage: usageStats 
+        usage: usageStats,
+        contextPruned: prunedHistory.length < conversationHistory.length
       };
     } catch (error) {
       this.addDebugLog('error', `Chat error: ${error.message}`);
+      
+      // Detect context window / memory exhaustion errors
+      if (error.message.includes('context_window_size') || 
+          error.message.includes('KV cache') ||
+          error.message.includes('out of memory') ||
+          error.message.includes('OOM')) {
+        this.addDebugLog('error', 'Context window exhausted - conversation too long');
+        throw new Error('CONTEXT_WINDOW_EXCEEDED: The conversation has become too long. Please clear some chat history.');
+      }
+      
       throw error;
     } finally {
       this.isProcessing = false;

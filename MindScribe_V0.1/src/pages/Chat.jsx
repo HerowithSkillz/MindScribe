@@ -26,6 +26,7 @@ const Chat = () => {
     totalTokens: 0,
     messageCount: 0
   });
+  const [contextWarning, setContextWarning] = useState(null); // Track context window warnings
   
   const messagesEndRef = useRef(null);
   const streamBufferRef = useRef('');
@@ -136,6 +137,13 @@ const Chat = () => {
       if (result && typeof result === 'object') {
         aiResponse = result.content || aiResponse;
         usageData = result.usage;
+        
+        // Check if context was pruned
+        if (result.contextPruned) {
+          setContextWarning('⚠️ Old messages were removed to fit context window. Consider clearing chat for better performance.');
+          // Auto-clear warning after 10 seconds
+          setTimeout(() => setContextWarning(null), 10000);
+        }
       }
 
       // Ensure final update with complete message
@@ -181,7 +189,17 @@ const Chat = () => {
       // Handle cancellation differently
       if (error.message === "Request cancelled") {
         // Don't add error message for cancelled requests
+      } else if (error.message.includes('CONTEXT_WINDOW_EXCEEDED')) {
+        // Context window exhausted - prompt user to clear history
+        setContextWarning('🚨 Context window full! Please clear chat history to continue.');
+        const errorMessage = {
+          role: 'assistant',
+          content: 'The conversation has become too long. Please clear the chat history using the button below to continue.',
+          timestamp: new Date().toISOString()
+        };
+        setMessages([...newMessages, errorMessage]);
       } else {
+        // Generic error
         const errorMessage = {
           role: 'assistant',
           content: 'I apologize, but I encountered an error. Please try again.',
@@ -240,6 +258,7 @@ const Chat = () => {
   const clearChat = async () => {
     if (window.confirm('Are you sure you want to clear the chat history?')) {
       setMessages([]);
+      setContextWarning(null); // Clear context warning
       setSessionStats({ // Issue #18: Reset session stats when clearing chat
         totalPromptTokens: 0,
         totalCompletionTokens: 0,
@@ -320,6 +339,39 @@ const Chat = () => {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto py-4 space-y-4 min-h-0 max-h-[calc(100vh-400px)]">
+          {/* Context Window Warning */}
+          {contextWarning && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-3 mb-4"
+            >
+              <div className="flex items-start gap-2">
+                <span className="text-xl">{contextWarning.includes('🚨') ? '🚨' : '⚠️'}</span>
+                <div className="flex-1">
+                  <p className="text-sm text-yellow-800 font-medium">
+                    {contextWarning}
+                  </p>
+                  {contextWarning.includes('full') && (
+                    <button
+                      onClick={clearChat}
+                      className="mt-2 px-3 py-1 bg-yellow-500 text-white rounded text-xs hover:bg-yellow-600"
+                    >
+                      Clear Chat History
+                    </button>
+                  )}
+                </div>
+                <button
+                  onClick={() => setContextWarning(null)}
+                  className="text-yellow-600 hover:text-yellow-800"
+                >
+                  ✕
+                </button>
+              </div>
+            </motion.div>
+          )}
+          
           {/* Assessment Prompt Banner */}
           {showAssessmentPrompt && !hasCompletedDASS21 && (
             <motion.div
