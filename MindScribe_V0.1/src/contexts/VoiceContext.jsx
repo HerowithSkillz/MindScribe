@@ -307,11 +307,13 @@ export const VoiceProvider = ({ children }) => {
           averageLatency: processingMetrics?.total || 0
         };
 
-        currentSessionIdRef.current = await voiceSessionStorage.saveSession(sessionData);
-        console.log(`✅ Session saved with ID: ${currentSessionIdRef.current}`);
+        // DISABLED: Voice therapy sessions are NOT saved for privacy
+        // User explicitly requested no storage of voice therapy communications
+        // currentSessionIdRef.current = await voiceSessionStorage.saveSession(sessionData);
+        console.log(`✅ Session ended (not saved - privacy mode)`);
 
-        // Reload session history
-        await loadSessionHistory();
+        // Session history reload disabled
+        // await loadSessionHistory();
       } catch (storageError) {
         console.error('❌ Failed to save session:', storageError);
         // Continue even if storage fails

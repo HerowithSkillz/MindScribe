@@ -29,6 +29,12 @@ class VoicePipeline {
     this.vadInstance = null;
     this.useVAD = true; // Enable VAD by default
     
+    // Streaming audio queue for real-time playback
+    this.audioQueue = [];
+    this.isPlaying = false;
+    this.nextPlayTime = 0;
+    this.scheduledSources = [];
+    
     // Performance tracking
     this.lastProcessingTime = {
       stt: 0,
@@ -143,8 +149,9 @@ class VoicePipeline {
         throw new Error('No speech detected');
       }
 
-      // Step 2 & 3: Generate AI Response with Streaming TTS (parallel!)
-      console.log('🤖 Step 2: Generating AI response with streaming TTS...');
+      // Step 2 & 3: Generate AI Response with TRUE STREAMING TTS
+      // Audio plays immediately as each sentence is synthesized!
+      console.log('🤖 Step 2: Generating AI response with real-time streaming TTS...');
       const llmStart = performance.now();
       
       // Get conversation history for context (last 3 exchanges)
@@ -152,15 +159,17 @@ class VoicePipeline {
       
       let aiResponse = '';
       const audioChunks = [];
-      let firstAudioPlayed = false;
       
-      // Use streaming generation for parallel TTS
+      // Reset streaming audio state
+      this.resetStreamingAudio();
+      
+      // Use streaming generation with immediate audio playback
       aiResponse = await webLLMService.generateStreamingResponse(
         transcript,
         contextHistory,
-        // onSentence callback - synthesize and queue audio for each sentence
+        // onSentence callback - synthesize and IMMEDIATELY queue for playback
         async (sentence) => {
-          console.log(`🗣️ Synthesizing sentence: "${sentence}"`);
+          console.log(`🗣️ Synthesizing: "${sentence}"`);
           const ttsStart = performance.now();
           
           try {
@@ -169,16 +178,14 @@ class VoicePipeline {
             });
             
             const ttsDuration = performance.now() - ttsStart;
-            console.log(`✅ Sentence synthesized (${ttsDuration.toFixed(0)}ms)`);
+            console.log(`✅ Synthesized (${ttsDuration.toFixed(0)}ms) - Queueing for immediate playback`);
             
             audioChunks.push(audioOutput.audioData);
             
-            // Start playing first chunk immediately for perceived speed
-            if (!firstAudioPlayed && options.onPartialAudio) {
-              firstAudioPlayed = true;
-              console.log('🔊 Playing first audio chunk immediately...');
-              options.onPartialAudio(audioOutput.audioData);
-            }
+            // Queue audio for immediate streaming playback
+            // This plays audio AS SOON AS it's synthesized, not after everything is done
+            this.queueStreamingAudio(audioOutput.audioData);
+            
           } catch (ttsError) {
             console.error('TTS error for sentence:', ttsError);
           }
@@ -190,18 +197,13 @@ class VoicePipeline {
       this.lastProcessingTime.llm = performance.now() - llmStart;
       console.log(`✅ AI Response: "${aiResponse}" (${this.lastProcessingTime.llm.toFixed(0)}ms)`);
 
-      // Step 4: Play remaining audio chunks
-      console.log('🔊 Step 3: Playing audio response...');
+      // Wait for any remaining audio to finish playing
+      console.log('🔊 Step 3: Waiting for streaming audio to complete...');
       const playStart = performance.now();
-      
-      // Concatenate all audio chunks and play
-      if (audioChunks.length > 0) {
-        const concatenatedAudio = this.concatenateAudioChunks(audioChunks);
-        await this.playAudio(concatenatedAudio);
-      }
+      await this.waitForStreamingAudioComplete();
       
       this.lastProcessingTime.tts = performance.now() - playStart;
-      console.log(`✅ Audio playback complete (${this.lastProcessingTime.tts.toFixed(0)}ms)`);
+      console.log(`✅ Streaming audio complete (${this.lastProcessingTime.tts.toFixed(0)}ms)`);
 
       // Update conversation history
       this.conversationHistory.push(
@@ -276,24 +278,21 @@ class VoicePipeline {
           this.audioContext.resume();
         }
 
-        // Create audio buffer
+        // Create audio buffer at Piper's native sample rate
+        // NO playbackRate modification - preserves natural voice pitch
         const audioBuffer = this.audioContext.createBuffer(
           1, // mono
           audioData.length,
-          22050 // Piper sample rate
+          22050 // Piper native sample rate
         );
 
         // Copy audio data to buffer
         audioBuffer.getChannelData(0).set(audioData);
 
-        // Create buffer source
+        // Create buffer source - natural playback, no pitch modification
         const source = this.audioContext.createBufferSource();
         source.buffer = audioBuffer;
-        
-        // Apply speech rate from Piper service for faster/natural playback
-        const speechRate = piperService.getSpeechRate();
-        source.playbackRate.value = speechRate;
-        
+        // playbackRate stays at default 1.0 for natural voice quality
         source.connect(this.audioContext.destination);
 
         // Handle playback end
@@ -307,8 +306,8 @@ class VoicePipeline {
         source.start(0);
         this.currentAudioSource = source;
         
-        const adjustedDuration = (audioData.length / 22050) / speechRate;
-        console.log(`🔊 Playing ${adjustedDuration.toFixed(1)}s of audio (${speechRate}x speed)`);
+        const duration = audioData.length / 22050;
+        console.log(`🔊 Playing ${duration.toFixed(1)}s of natural audio`);
 
       } catch (error) {
         console.error('❌ Failed to play audio:', error);
@@ -318,9 +317,132 @@ class VoicePipeline {
   }
 
   /**
+   * Reset streaming audio state for new response
+   * @private
+   */
+  resetStreamingAudio() {
+    // Stop any currently playing audio
+    this.stopAllStreamingAudio();
+    
+    // Reset state
+    this.audioQueue = [];
+    this.isPlaying = false;
+    this.nextPlayTime = 0;
+    this.scheduledSources = [];
+  }
+
+  /**
+   * Queue audio chunk for immediate streaming playback
+   * Uses Web Audio API scheduling for seamless playback
+   * @param {Float32Array} audioData - Audio samples to queue
+   */
+  queueStreamingAudio(audioData) {
+    if (!this.audioContext) {
+      console.error('[VoicePipeline] Audio context not initialized');
+      return;
+    }
+
+    try {
+      // Resume audio context if suspended (browser autoplay policy)
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume();
+      }
+
+      // Create audio buffer at Piper's native sample rate
+      // NO playbackRate modification - preserves natural voice pitch and quality
+      const audioBuffer = this.audioContext.createBuffer(
+        1, // mono
+        audioData.length,
+        22050 // Piper native sample rate - play as-is for natural voice
+      );
+      audioBuffer.getChannelData(0).set(audioData);
+
+      // Create buffer source - NO playbackRate change to preserve natural pitch
+      const source = this.audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      // playbackRate = 1.0 (default) - natural voice without pitch distortion
+      source.connect(this.audioContext.destination);
+
+      // Calculate when to start this chunk
+      const currentTime = this.audioContext.currentTime;
+      const audioDuration = audioData.length / 22050; // Natural duration
+      
+      // If this is the first chunk or we've fallen behind, start immediately
+      if (!this.isPlaying || this.nextPlayTime < currentTime) {
+        this.nextPlayTime = currentTime + 0.05; // Small buffer for smooth start
+        this.isPlaying = true;
+      }
+
+      // Schedule this chunk to play right after the previous one
+      source.start(this.nextPlayTime);
+      this.nextPlayTime += audioDuration;
+      
+      // Track scheduled sources for cleanup
+      this.scheduledSources.push(source);
+      
+      // Cleanup when this source finishes
+      source.onended = () => {
+        const index = this.scheduledSources.indexOf(source);
+        if (index > -1) {
+          this.scheduledSources.splice(index, 1);
+        }
+        // If no more sources, reset playing state
+        if (this.scheduledSources.length === 0) {
+          this.isPlaying = false;
+        }
+      };
+
+      console.log(`🎵 Queued ${audioDuration.toFixed(2)}s audio, playing at ${this.nextPlayTime.toFixed(2)}s`);
+
+    } catch (error) {
+      console.error('[VoicePipeline] Failed to queue streaming audio:', error);
+    }
+  }
+
+  /**
+   * Wait for all streaming audio to finish playing
+   * @returns {Promise<void>}
+   */
+  async waitForStreamingAudioComplete() {
+    if (!this.isPlaying && this.scheduledSources.length === 0) {
+      return; // Nothing playing
+    }
+
+    return new Promise((resolve) => {
+      const checkComplete = () => {
+        if (this.scheduledSources.length === 0 && !this.isPlaying) {
+          console.log('🔇 All streaming audio complete');
+          resolve();
+        } else {
+          // Check again in 100ms
+          setTimeout(checkComplete, 100);
+        }
+      };
+      checkComplete();
+    });
+  }
+
+  /**
+   * Stop all scheduled/playing streaming audio
+   */
+  stopAllStreamingAudio() {
+    for (const source of this.scheduledSources) {
+      try {
+        source.stop();
+      } catch (e) {
+        // Ignore if already stopped
+      }
+    }
+    this.scheduledSources = [];
+    this.isPlaying = false;
+    this.nextPlayTime = 0;
+  }
+
+  /**
    * Stop currently playing audio
    */
   stopAudio() {
+    // Stop legacy single-source audio
     if (this.currentAudioSource) {
       try {
         this.currentAudioSource.stop();
@@ -330,6 +452,9 @@ class VoicePipeline {
         console.warn('Failed to stop audio:', error);
       }
     }
+    
+    // Stop all streaming audio
+    this.stopAllStreamingAudio();
   }
 
   /**

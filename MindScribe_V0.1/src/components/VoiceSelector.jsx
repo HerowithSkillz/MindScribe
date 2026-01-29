@@ -13,7 +13,8 @@ const VoiceSelector = ({ onVoiceChange, disabled = false }) => {
   const [selectedVoice, setSelectedVoice] = useState(null);
   const [isChanging, setIsChanging] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
-  const [speechRate, setSpeechRate] = useState(1.25);
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [cacheSize, setCacheSize] = useState('');
 
   // Load available voices on mount
   useEffect(() => {
@@ -25,8 +26,8 @@ const VoiceSelector = ({ onVoiceChange, disabled = false }) => {
     const currentVoice = availableVoices.find(v => v.id === currentVoiceId);
     setSelectedVoice(currentVoice || availableVoices[0]);
     
-    // Get current speech rate
-    setSpeechRate(piperService.getSpeechRate());
+    // Get cache size
+    piperService.getCacheSize().then(info => setCacheSize(info.formatted));
   }, []);
 
   // Handle voice selection
@@ -50,10 +51,26 @@ const VoiceSelector = ({ onVoiceChange, disabled = false }) => {
     }
   };
 
-  // Handle speech rate change
-  const handleRateChange = (newRate) => {
-    setSpeechRate(newRate);
-    piperService.setSpeechRate(newRate);
+  // Handle cache clearing
+  const handleClearCache = async () => {
+    if (isClearingCache) return;
+    
+    setIsClearingCache(true);
+    try {
+      const result = await piperService.clearCachedModels();
+      console.log('Cache cleared:', result);
+      
+      // Update cache size display
+      const newSize = await piperService.getCacheSize();
+      setCacheSize(newSize.formatted);
+      
+      alert(`✅ Voice model cache cleared!\n\nCleared ${result.cleared} caches.\nPlease refresh the page for the change to take effect.`);
+    } catch (error) {
+      console.error('Failed to clear cache:', error);
+      alert('Failed to clear cache: ' + error.message);
+    } finally {
+      setIsClearingCache(false);
+    }
   };
 
   // Group voices by gender
@@ -156,46 +173,36 @@ const VoiceSelector = ({ onVoiceChange, disabled = false }) => {
                 </div>
               </div>
 
-              {/* Speed Control */}
+              {/* Cache Management */}
               <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
                 <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 px-1">
-                  ⚡ Speech Speed
+                  💾 Voice Model Cache
                 </h4>
-                <div className="flex items-center gap-3 px-1">
-                  <span className="text-xs text-gray-500">🐢</span>
-                  <input
-                    type="range"
-                    min="0.8"
-                    max="1.6"
-                    step="0.05"
-                    value={speechRate}
-                    onChange={(e) => handleRateChange(parseFloat(e.target.value))}
-                    className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
-                  />
-                  <span className="text-xs text-gray-500">🐇</span>
-                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300 w-12 text-right">
-                    {speechRate.toFixed(2)}x
-                  </span>
-                </div>
-                <div className="flex justify-between px-1 mt-1">
+                <div className="px-1">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-gray-600 dark:text-gray-400">
+                      Storage used: <span className="font-medium">{cacheSize}</span>
+                    </span>
+                  </div>
                   <button
-                    onClick={() => handleRateChange(1.0)}
-                    className="text-xs text-purple-600 dark:text-purple-400 hover:underline"
+                    onClick={handleClearCache}
+                    disabled={isClearingCache}
+                    className="w-full py-2 px-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-xs font-medium rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
                   >
-                    Slow
+                    {isClearingCache ? (
+                      <>
+                        <div className="w-3 h-3 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                        Clearing...
+                      </>
+                    ) : (
+                      <>
+                        🗑️ Clear Cached Voice Models
+                      </>
+                    )}
                   </button>
-                  <button
-                    onClick={() => handleRateChange(1.25)}
-                    className="text-xs text-purple-600 dark:text-purple-400 hover:underline"
-                  >
-                    Normal
-                  </button>
-                  <button
-                    onClick={() => handleRateChange(1.5)}
-                    className="text-xs text-purple-600 dark:text-purple-400 hover:underline"
-                  >
-                    Fast
-                  </button>
+                  <p className="text-xs text-gray-500 dark:text-gray-500 mt-1.5 text-center">
+                    Force re-download of voice models
+                  </p>
                 </div>
               </div>
             </div>

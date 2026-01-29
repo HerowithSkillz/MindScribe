@@ -16,9 +16,9 @@ class PiperService {
     this.isLoading = false;
     this.currentVoice = null;
     
-    // Speech rate control (1.0 = normal, 1.3 = 30% faster, etc.)
-    // Default to 1.25 for ASMR - slightly faster but still soothing
-    this.speechRate = 1.25;
+    // Speech rate control (1.0 = normal/natural pitch, higher = faster but pitch affected)
+    // Default to 1.0 for NATURAL unmodified voice quality
+    this.speechRate = 1.0;
     
     // Base paths for piper-wasm assets (copied by vite-plugin-static-copy)
     this.piperBasePath = '/piper';
@@ -358,6 +358,96 @@ class PiperService {
    */
   getSpeechRate() {
     return this.speechRate;
+  }
+
+  /**
+   * Clear all cached voice models from browser storage
+   * Clears Cache API storage used by piper-wasm
+   * @returns {Promise<{cleared: number, errors: string[]}>}
+   */
+  async clearCachedModels() {
+    const result = { cleared: 0, errors: [] };
+    
+    try {
+      console.log('[Piper] Clearing cached voice models...');
+      
+      // Clear Cache API caches (used by piper-wasm for model storage)
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        for (const cacheName of cacheNames) {
+          // Clear caches related to piper/huggingface models
+          if (cacheName.includes('piper') || 
+              cacheName.includes('huggingface') || 
+              cacheName.includes('onnx') ||
+              cacheName.includes('transformers')) {
+            try {
+              await caches.delete(cacheName);
+              result.cleared++;
+              console.log(`[Piper] Cleared cache: ${cacheName}`);
+            } catch (e) {
+              result.errors.push(`Failed to clear ${cacheName}: ${e.message}`);
+            }
+          }
+        }
+      }
+
+      // Clear IndexedDB storage for piper-wasm blobs
+      const dbNames = ['piper-wasm', 'piper-models', 'onnx-models'];
+      for (const dbName of dbNames) {
+        try {
+          const deleteRequest = indexedDB.deleteDatabase(dbName);
+          await new Promise((resolve, reject) => {
+            deleteRequest.onsuccess = () => {
+              result.cleared++;
+              console.log(`[Piper] Deleted IndexedDB: ${dbName}`);
+              resolve();
+            };
+            deleteRequest.onerror = () => reject(deleteRequest.error);
+            deleteRequest.onblocked = () => {
+              console.warn(`[Piper] IndexedDB ${dbName} delete blocked`);
+              resolve();
+            };
+          });
+        } catch (e) {
+          // Database might not exist, that's OK
+        }
+      }
+
+      // Clear any cached blobs from piper-wasm module
+      // Note: piper-wasm stores blobs in a module-level cache
+      
+      // Reset local state
+      this.isInitialized = false;
+      this.currentVoice = null;
+      
+      console.log(`✅ [Piper] Cleared ${result.cleared} caches`);
+      return result;
+      
+    } catch (error) {
+      console.error('[Piper] Failed to clear caches:', error);
+      result.errors.push(error.message);
+      return result;
+    }
+  }
+
+  /**
+   * Get estimated cache size
+   * @returns {Promise<{size: number, formatted: string}>}
+   */
+  async getCacheSize() {
+    try {
+      if ('storage' in navigator && 'estimate' in navigator.storage) {
+        const estimate = await navigator.storage.estimate();
+        const usedMB = (estimate.usage || 0) / (1024 * 1024);
+        return {
+          size: estimate.usage || 0,
+          formatted: `${usedMB.toFixed(1)} MB`
+        };
+      }
+      return { size: 0, formatted: 'Unknown' };
+    } catch (error) {
+      return { size: 0, formatted: 'Unknown' };
+    }
   }
 
   /**
