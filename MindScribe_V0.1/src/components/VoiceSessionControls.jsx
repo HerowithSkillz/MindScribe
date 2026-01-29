@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
  * 
  * Provides controls for voice therapy session:
  * - Start/End session
- * - Push-to-talk button
+ * - Manual mic toggle button (press to record, press to stop and process)
  * - Session status indicators
  * - Recording timer
  */
@@ -19,8 +19,7 @@ const VoiceSessionControls = ({
   conversationHistory = [],
   onStartSession,
   onEndSession,
-  onStartRecording,
-  onStopRecording,
+  onToggleMic,  // New: Single toggle function for mic
   disabled = false
 }) => {
 
@@ -69,92 +68,157 @@ const VoiceSessionControls = ({
             whileTap={{ scale: 0.95 }}
             onClick={onStartSession}
             disabled={disabled}
-            className="px-8 py-4 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg font-semibold text-lg shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-10 py-5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-2xl font-bold text-xl shadow-2xl hover:shadow-blue-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            🎙️ Start Voice Session
+            🎙️ Start Session
           </motion.button>
         ) : (
-          <>
-            {/* Push-to-Talk Button */}
+          /* Session Active: Show Mic Toggle and End Session */
+          <div className="flex flex-col items-center gap-4">
+            {/* Mic Toggle Button */}
             <motion.button
-              whileHover={{ scale: 1.1 }}
-              whileTap={{ scale: 0.9 }}
-              onMouseDown={!isRecording && !isProcessing && !isSpeaking ? onStartRecording : null}
-              onMouseUp={isRecording ? onStopRecording : null}
-              onTouchStart={!isRecording && !isProcessing && !isSpeaking ? onStartRecording : null}
-              onTouchEnd={isRecording ? onStopRecording : null}
-              disabled={isProcessing || isSpeaking || disabled}
-              className={`relative w-24 h-24 rounded-full shadow-lg transition-all ${
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={onToggleMic}
+              disabled={disabled || isProcessing || isSpeaking}
+              className={`w-24 h-24 rounded-full font-bold text-3xl shadow-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center ${
                 isRecording
-                  ? 'bg-red-500 shadow-red-500/50 animate-pulse'
-                  : isProcessing || isSpeaking
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-gradient-to-br from-green-400 to-blue-500 hover:shadow-xl hover:shadow-blue-500/50'
-              } disabled:opacity-50`}
+                  ? 'bg-gradient-to-r from-red-500 to-pink-600 text-white animate-pulse shadow-red-500/50'
+                  : 'bg-gradient-to-r from-green-500 to-teal-600 text-white hover:shadow-green-500/50'
+              }`}
             >
-              <div className="text-4xl">
-                {isRecording ? '🎤' : isProcessing ? '⚙️' : isSpeaking ? '🔊' : '🎙️'}
+              {isRecording ? '⏹️' : '🎤'}
+            </motion.button>
+            
+            {/* Recording duration */}
+            {isRecording && (
+              <div className="text-red-500 font-mono text-lg font-semibold">
+                {formatDuration(recordingDuration)}
               </div>
-              
-              {/* Recording pulse effect */}
-              {isRecording && (
+            )}
+            
+            {/* End Session Button */}
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={onEndSession}
+              disabled={disabled || isRecording || isProcessing}
+              className="px-6 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-medium text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              End Session
+            </motion.button>
+          </div>
+        )}
+      </div>
+
+      {/* Visual Indicator for Session State */}
+      {sessionActive && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex items-center justify-center"
+        >
+          <div className={`relative w-32 h-32 rounded-full flex items-center justify-center ${
+            isSpeaking
+              ? 'bg-purple-500/20'
+              : isProcessing
+              ? 'bg-yellow-500/20'
+              : isRecording
+              ? 'bg-red-500/20'
+              : 'bg-green-500/20'
+          }`}>
+            <div className="text-6xl">
+              {isSpeaking ? '🔊' : isProcessing ? '⚙️' : isRecording ? '🎤' : '👂'}
+            </div>
+            
+            {/* Animated pulse rings */}
+            {(isRecording || isSpeaking) && (
+              <>
                 <motion.div
-                  className="absolute inset-0 rounded-full border-4 border-red-400"
+                  className={`absolute inset-0 rounded-full border-4 ${
+                    isRecording ? 'border-red-400' : 'border-purple-400'
+                  }`}
                   animate={{
-                    scale: [1, 1.3, 1],
-                    opacity: [1, 0, 1]
+                    scale: [1, 1.4],
+                    opacity: [0.8, 0]
                   }}
                   transition={{
                     duration: 1.5,
                     repeat: Infinity,
-                    ease: "easeInOut"
+                    ease: "easeOut"
                   }}
                 />
-              )}
-            </motion.button>
-
-            {/* End Session Button */}
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={onEndSession}
-              disabled={isRecording || isProcessing || disabled}
-              className="px-6 py-3 bg-red-500 text-white rounded-lg font-medium shadow-md hover:bg-red-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              ⏹️ End Session
-            </motion.button>
-          </>
-        )}
-      </div>
-
-      {/* Recording Timer */}
-      {isRecording && (
+                <motion.div
+                  className={`absolute inset-0 rounded-full border-4 ${
+                    isRecording ? 'border-red-400' : 'border-purple-400'
+                  }`}
+                  animate={{
+                    scale: [1, 1.4],
+                    opacity: [0.8, 0]
+                  }}
+                  transition={{
+                    duration: 1.5,
+                    repeat: Infinity,
+                    ease: "easeOut",
+                    delay: 0.5
+                  }}
+                />
+              </>
+            )}
+          </div>
+        </motion.div>
+      )}
+      
+      {/* Session Active Indicator */}
+      {sessionActive && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           className="text-center"
         >
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-red-500/10 border border-red-500/30 rounded-full">
-            <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-            <span className="text-red-400 font-mono text-sm">
-              {formatDuration(recordingDuration)}
+          <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${
+            isRecording 
+              ? 'bg-red-500/10 border border-red-500/30' 
+              : isProcessing 
+              ? 'bg-yellow-500/10 border border-yellow-500/30'
+              : isSpeaking
+              ? 'bg-purple-500/10 border border-purple-500/30'
+              : 'bg-green-500/10 border border-green-500/30'
+          }`}>
+            <div className={`w-2 h-2 rounded-full animate-pulse ${
+              isRecording ? 'bg-red-500' : isProcessing ? 'bg-yellow-500' : isSpeaking ? 'bg-purple-500' : 'bg-green-500'
+            }`} />
+            <span className={`font-medium text-sm ${
+              isRecording ? 'text-red-400' : isProcessing ? 'text-yellow-400' : isSpeaking ? 'text-purple-400' : 'text-green-400'
+            }`}>
+              {isRecording ? 'Recording...' : isProcessing ? 'Processing...' : isSpeaking ? 'AI Speaking...' : 'Ready'}
             </span>
           </div>
         </motion.div>
       )}
 
       {/* Instructions */}
-      <div className="text-center text-xs text-gray-500 dark:text-gray-400 max-w-md mx-auto">
+      <div className="text-center text-sm text-gray-600 dark:text-gray-400 max-w-md mx-auto space-y-2">
         {!sessionActive ? (
-          <p>Click "Start Voice Session" to begin your therapy conversation</p>
+          <>
+            <p className="font-medium">Ready to start your therapy session?</p>
+            <p className="text-xs">Click "Start Session" to begin.</p>
+          </>
         ) : (
-          <p>
-            {isRecording
-              ? 'Release to send your message'
-              : isProcessing || isSpeaking
-              ? 'Please wait...'
-              : 'Hold the microphone button to speak'}
-          </p>
+          <>
+            <p className="font-medium">
+              {isSpeaking
+                ? '🔊 AI is responding...'
+                : isProcessing
+                ? '⚙️ Processing your message...'
+                : isRecording
+                ? '🎤 Recording... Tap mic to stop'
+                : '👆 Tap the mic to speak'}
+            </p>
+            <p className="text-xs">
+              Press the mic button to record your message, then press again to send
+            </p>
+          </>
         )}
       </div>
     </div>

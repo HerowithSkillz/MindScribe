@@ -3,15 +3,17 @@
  * 
  * Orchestrates the complete voice therapy conversation flow:
  * 1. User speaks → Audio Recording
- * 2. Audio → Whisper STT → Text
+ * 2. Audio → Whisper WebGPU STT → Text (6-8x faster with GPU!)
  * 3. Text → WebLLM → AI Response
  * 4. AI Response → Piper TTS → Audio
  * 5. Audio → Speaker Playback
  * 
  * Manages state and coordinates between all voice services
+ * 
+ * Updated: Now uses WebGPU-accelerated Whisper for faster transcription
  */
 
-import whisperService from './whisper.js';
+import whisperWebGPU from './whisperWebGPU.js';
 import piperService from './piper.js';
 import webLLMService from './webllm.js';
 import audioRecorder from './audioRecorder.js';
@@ -46,10 +48,9 @@ class VoicePipeline {
     try {
       console.log('[VoicePipeline] Initializing...');
 
-      // Initialize audio context for playback
-      this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: 22050 // Piper TTS outputs 22.05kHz
-      });
+      // Initialize audio context for playback  
+      // Let browser use default sample rate and resample Piper's 22050Hz audio
+      this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
       // Initialize VAD if enabled
       this.useVAD = options.useVAD !== false;
@@ -125,53 +126,82 @@ class VoicePipeline {
     try {
       console.log('🎯 [VoicePipeline] Starting voice-to-voice processing...');
 
-      // Step 1: Speech-to-Text (Whisper)
-      console.log('🎤 Step 1: Transcribing speech...');
+      // Step 1: Speech-to-Text (Whisper WebGPU - 6-8x faster!)
+      console.log('🎤 Step 1: Transcribing speech with WebGPU...');
       const sttStart = performance.now();
-      const transcript = await whisperService.transcribe(audioData, {
+      const transcript = await whisperWebGPU.transcribe(audioData, {
         language: options.language || 'en'
       });
       this.lastProcessingTime.stt = performance.now() - sttStart;
       console.log(`✅ Transcription: "${transcript}" (${this.lastProcessingTime.stt.toFixed(0)}ms)`);
+      
+      // Log WebGPU acceleration status
+      const whisperInfo = whisperWebGPU.getModelInfo();
+      console.log(`📊 Whisper using: ${whisperInfo.device.toUpperCase()}`);
 
       if (!transcript || transcript.trim().length === 0) {
         throw new Error('No speech detected');
       }
 
-      // Step 2: Generate AI Response (WebLLM)
-      console.log('🤖 Step 2: Generating AI response...');
+      // Step 2 & 3: Generate AI Response with Streaming TTS (parallel!)
+      console.log('🤖 Step 2: Generating AI response with streaming TTS...');
       const llmStart = performance.now();
       
       // Get conversation history for context (last 3 exchanges)
-      const contextHistory = this.conversationHistory.slice(-6); // 3 user + 3 AI messages
+      const contextHistory = this.conversationHistory.slice(-6);
       
-      const llmResult = await webLLMService.chat(
+      let aiResponse = '';
+      const audioChunks = [];
+      let firstAudioPlayed = false;
+      
+      // Use streaming generation for parallel TTS
+      aiResponse = await webLLMService.generateStreamingResponse(
         transcript,
         contextHistory,
-        null,
-        {
-          maxTokens: 150, // Short responses for voice
-          temperature: 0.8 // Slightly more conversational
-        }
+        // onSentence callback - synthesize and queue audio for each sentence
+        async (sentence) => {
+          console.log(`🗣️ Synthesizing sentence: "${sentence}"`);
+          const ttsStart = performance.now();
+          
+          try {
+            const audioOutput = await piperService.synthesize(sentence, {
+              speed: options.speed || 1.0
+            });
+            
+            const ttsDuration = performance.now() - ttsStart;
+            console.log(`✅ Sentence synthesized (${ttsDuration.toFixed(0)}ms)`);
+            
+            audioChunks.push(audioOutput.audioData);
+            
+            // Start playing first chunk immediately for perceived speed
+            if (!firstAudioPlayed && options.onPartialAudio) {
+              firstAudioPlayed = true;
+              console.log('🔊 Playing first audio chunk immediately...');
+              options.onPartialAudio(audioOutput.audioData);
+            }
+          } catch (ttsError) {
+            console.error('TTS error for sentence:', ttsError);
+          }
+        },
+        // onToken callback - for real-time text updates
+        options.onToken || null
       );
       
-      // Extract text content from WebLLM response object
-      const aiResponse = typeof llmResult === 'string' ? llmResult : llmResult.content;
       this.lastProcessingTime.llm = performance.now() - llmStart;
       console.log(`✅ AI Response: "${aiResponse}" (${this.lastProcessingTime.llm.toFixed(0)}ms)`);
 
-      // Step 3: Text-to-Speech (Piper)
-      console.log('🗣️ Step 3: Synthesizing speech...');
-      const ttsStart = performance.now();
-      const audioOutput = await piperService.synthesize(aiResponse, {
-        speed: options.speed || 1.0
-      });
-      this.lastProcessingTime.tts = performance.now() - ttsStart;
-      console.log(`✅ Speech synthesized (${this.lastProcessingTime.tts.toFixed(0)}ms)`);
-
-      // Step 4: Play audio
-      console.log('🔊 Step 4: Playing audio response...');
-      await this.playAudio(audioOutput.audioData);
+      // Step 4: Play remaining audio chunks
+      console.log('🔊 Step 3: Playing audio response...');
+      const playStart = performance.now();
+      
+      // Concatenate all audio chunks and play
+      if (audioChunks.length > 0) {
+        const concatenatedAudio = this.concatenateAudioChunks(audioChunks);
+        await this.playAudio(concatenatedAudio);
+      }
+      
+      this.lastProcessingTime.tts = performance.now() - playStart;
+      console.log(`✅ Audio playback complete (${this.lastProcessingTime.tts.toFixed(0)}ms)`);
 
       // Update conversation history
       this.conversationHistory.push(
@@ -182,12 +212,12 @@ class VoicePipeline {
       // Calculate total processing time
       this.lastProcessingTime.total = performance.now() - startTime;
       console.log(`✅ [VoicePipeline] Complete! Total: ${this.lastProcessingTime.total.toFixed(0)}ms`);
-      console.log(`📊 Breakdown: STT=${this.lastProcessingTime.stt.toFixed(0)}ms, LLM=${this.lastProcessingTime.llm.toFixed(0)}ms, TTS=${this.lastProcessingTime.tts.toFixed(0)}ms`);
+      console.log(`📊 Breakdown: STT=${this.lastProcessingTime.stt.toFixed(0)}ms, LLM+TTS=${this.lastProcessingTime.llm.toFixed(0)}ms`);
 
       return {
         transcript,
         aiResponse,
-        audioOutput,
+        audioChunks,
         processingTime: this.lastProcessingTime
       };
 
@@ -197,6 +227,27 @@ class VoicePipeline {
     } finally {
       this.isProcessing = false;
     }
+  }
+
+  /**
+   * Concatenate multiple audio chunks into a single Float32Array
+   * @param {Float32Array[]} chunks - Array of audio chunks
+   * @returns {Float32Array} - Combined audio data
+   */
+  concatenateAudioChunks(chunks) {
+    if (chunks.length === 0) return new Float32Array(0);
+    if (chunks.length === 1) return chunks[0];
+    
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const result = new Float32Array(totalLength);
+    
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+    
+    return result;
   }
 
   /**
@@ -238,6 +289,11 @@ class VoicePipeline {
         // Create buffer source
         const source = this.audioContext.createBufferSource();
         source.buffer = audioBuffer;
+        
+        // Apply speech rate from Piper service for faster/natural playback
+        const speechRate = piperService.getSpeechRate();
+        source.playbackRate.value = speechRate;
+        
         source.connect(this.audioContext.destination);
 
         // Handle playback end
@@ -250,8 +306,9 @@ class VoicePipeline {
         // Start playback
         source.start(0);
         this.currentAudioSource = source;
-
-        console.log(`🔊 Playing ${(audioData.length / 22050).toFixed(1)}s of audio`);
+        
+        const adjustedDuration = (audioData.length / 22050) / speechRate;
+        console.log(`🔊 Playing ${adjustedDuration.toFixed(1)}s of audio (${speechRate}x speed)`);
 
       } catch (error) {
         console.error('❌ Failed to play audio:', error);

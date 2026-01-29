@@ -43,7 +43,7 @@ class WhisperService {
       }
     ];
     
-    this.selectedModel = 'base.en'; // Default to base model
+    this.selectedModel = 'tiny.en'; // Default to tiny for 10x faster speed
   }
 
   /**
@@ -52,7 +52,7 @@ class WhisperService {
    * @param {Function} onProgress - Progress callback
    * @returns {Promise<void>}
    */
-  async loadModel(modelId = 'base.en', onProgress = null) {
+  async loadModel(modelId = 'tiny.en', onProgress = null) {
     if (this.isLoading) {
       throw new Error('Model is already loading');
     }

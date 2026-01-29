@@ -428,6 +428,98 @@ Tailor your responses based on this baseline. Be particularly mindful of their $
     return false;
   }
 
+  /**
+   * Generate streaming response with sentence-level callbacks
+   * Used for parallel TTS synthesis - sends complete sentences as they're generated
+   * 
+   * @param {string} userMessage - The user's message
+   * @param {Array} conversationHistory - Previous conversation turns
+   * @param {Function} onSentence - Callback for each complete sentence (for TTS)
+   * @param {Function} onToken - Optional callback for each token (for UI updates)
+   * @returns {Promise<string>} - The full response
+   */
+  async generateStreamingResponse(userMessage, conversationHistory = [], onSentence = null, onToken = null) {
+    if (!this.engine) throw createError('MODEL', 'NOT_INITIALIZED');
+    
+    await this.waitForProcessing();
+    this.isProcessing = true;
+    this.abortController = new AbortController();
+
+    try {
+      this.addDebugLog('task', 'Generating streaming response for voice...');
+
+      const fullMessages = [
+        { role: 'system', content: this.systemPrompt },
+        ...conversationHistory.slice(-6), // Keep last 3 exchanges for context
+        { role: 'user', content: userMessage }
+      ];
+
+      const chunks = await this.engine.chat.completions.create({
+        messages: fullMessages,
+        temperature: 0.7, // Slightly more varied for natural conversation
+        top_p: 0.9,
+        max_tokens: 150, // Shorter responses for voice
+        stream: true,
+      });
+
+      let fullResponse = '';
+      let sentenceBuffer = '';
+      const sentenceEndPattern = /[.!?]+\s*/;
+      
+      for await (const chunk of chunks) {
+        if (this.abortController?.signal.aborted) {
+          this.addDebugLog('warning', 'Streaming cancelled');
+          break;
+        }
+        
+        const token = chunk.choices[0]?.delta?.content || '';
+        fullResponse += token;
+        sentenceBuffer += token;
+        
+        // Call token callback for real-time UI updates
+        if (onToken) onToken(token);
+        
+        // Check for complete sentences
+        const sentences = sentenceBuffer.split(sentenceEndPattern);
+        
+        // If we have more than one part, we found sentence boundaries
+        if (sentences.length > 1) {
+          // Send all complete sentences except the last (which may be incomplete)
+          for (let i = 0; i < sentences.length - 1; i++) {
+            const sentence = sentences[i].trim();
+            if (sentence && onSentence) {
+              // Add punctuation back if it was stripped
+              const punctMatch = sentenceBuffer.match(sentenceEndPattern);
+              const punct = punctMatch ? punctMatch[0].trim() : '.';
+              const completeSentence = sentence + punct;
+              
+              this.addDebugLog('info', `[Streaming] Sentence ready: "${completeSentence}"`);
+              await onSentence(completeSentence);
+            }
+          }
+          // Keep only the incomplete part
+          sentenceBuffer = sentences[sentences.length - 1];
+        }
+      }
+      
+      // Send any remaining text as the final sentence
+      if (sentenceBuffer.trim() && onSentence) {
+        this.addDebugLog('info', `[Streaming] Final sentence: "${sentenceBuffer.trim()}"`);
+        await onSentence(sentenceBuffer.trim());
+      }
+      
+      this.addDebugLog('success', `Streaming complete: ${fullResponse.length} chars`);
+      return fullResponse;
+
+    } catch (error) {
+      this.addDebugLog('error', `Streaming error: ${error.message}`);
+      throw error;
+    } finally {
+      this.isProcessing = false;
+      this.abortController = null;
+    }
+  }
+
   // --- RESTORED: ROBUST JOURNAL ANALYSIS ---
   
   async analyzeJournal(journalText) {

@@ -4,6 +4,7 @@ import { useVoice } from '../contexts/VoiceContext';
 import VoiceSessionControls from '../components/VoiceSessionControls';
 import ConversationDisplay from '../components/ConversationDisplay';
 import VoiceVisualizer from '../components/VoiceVisualizer';
+import VoiceSelector from '../components/VoiceSelector';
 
 /**
  * Voice Therapy Page
@@ -32,8 +33,7 @@ const VoiceTherapy = () => {
     cleanupVoiceModels,
     startSession,
     endSession,
-    startRecording,
-    stopRecording,
+    toggleMic,  // New: Manual mic toggle
     clearHistory
   } = useVoice();
 
@@ -128,7 +128,7 @@ const VoiceTherapy = () => {
                     <div className={`w-5 h-5 rounded-full flex items-center justify-center ${loadingProgress.progress >= 20 ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'}`}>
                       {loadingProgress.progress >= 20 ? '✓' : '○'}
                     </div>
-                    <span>Initializing Whisper (Speech Recognition)</span>
+                    <span>Initializing Whisper WebGPU (Fast Speech Recognition)</span>
                   </div>
                   <div className={`flex items-center gap-3 text-sm ${loadingProgress.progress >= 70 ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-600'}`}>
                     <div className={`w-5 h-5 rounded-full flex items-center justify-center ${loadingProgress.progress >= 70 ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'}`}>
@@ -185,6 +185,17 @@ const VoiceTherapy = () => {
             >
               {/* Left Column: Controls & Visualizer */}
               <div className="lg:col-span-1 space-y-6">
+                {/* Voice Selector */}
+                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-4">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
+                    <span>🎙️</span> Therapist Voice
+                  </h3>
+                  <VoiceSelector 
+                    disabled={isRecording || isProcessing || isSpeaking}
+                    onVoiceChange={(voice) => console.log('Voice changed to:', voice.name)}
+                  />
+                </div>
+
                 {/* Session Controls */}
                 <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6">
                   <VoiceSessionControls
@@ -195,8 +206,7 @@ const VoiceTherapy = () => {
                     recordingDuration={recordingDuration}
                     onStartSession={startSession}
                     onEndSession={endSession}
-                    onStartRecording={startRecording}
-                    onStopRecording={stopRecording}
+                    onToggleMic={toggleMic}
                     conversationHistory={conversationHistory}
                   />
                 </div>

@@ -1,50 +1,116 @@
 /**
- * Piper TTS Service - Text-to-Speech using ONNX Runtime Web
+ * Piper TTS Service - Text-to-Speech using piper-wasm
  * 
- * Based on Piper TTS system:
- * https://github.com/rhasspy/piper
- * https://github.com/OHF-Voice/piper1-gpl (active fork)
+ * Uses the full piper-wasm package with proper espeak-ng phonemizer
+ * for accurate text-to-phoneme conversion. This eliminates the
+ * "gibberish speech" issue caused by limited dictionary fallback.
  * 
- * Provides offline neural text-to-speech using ONNX models in browser.
+ * Based on: https://github.com/DavidCks/piper-wasm
  */
+
+import { piperGenerate, HF_BASE } from 'piper-wasm';
 
 class PiperService {
   constructor() {
-    this.worker = null;
     this.isInitialized = false;
     this.isLoading = false;
     this.currentVoice = null;
-    this.session = null;
+    
+    // Speech rate control (1.0 = normal, 1.3 = 30% faster, etc.)
+    // Default to 1.25 for ASMR - slightly faster but still soothing
+    this.speechRate = 1.25;
+    
+    // Base paths for piper-wasm assets (copied by vite-plugin-static-copy)
+    this.piperBasePath = '/piper';
     
     // Available Piper voice models from HuggingFace
+    // Curated for therapeutic ASMR-like soothing voices
     this.availableVoices = [
+      // === FEMALE VOICES (Therapeutic/ASMR) ===
       {
-        id: 'en_US-lessac-medium',
-        name: 'Lessac (Female, US)',
+        id: 'en_US-amy-medium',
+        name: 'Amy',
         language: 'en-US',
         gender: 'female',
         size: '30MB',
         quality: 'high',
-        speed: '1.5x realtime',
-        description: 'Natural, empathetic tone - ideal for therapy conversations',
-        modelUrl: 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx',
-        configUrl: 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json'
+        category: 'asmr',
+        icon: '🌸',
+        description: 'Soft, gentle whisper-like voice - Perfect for ASMR therapy',
+        modelPath: 'en/en_US/amy/medium/en_US-amy-medium.onnx',
+        recommended: true
       },
       {
-        id: 'en_US-ryan-medium',
-        name: 'Ryan (Male, US)',
+        id: 'en_GB-jenny_dioco-medium',
+        name: 'Jenny',
+        language: 'en-GB',
+        gender: 'female',
+        size: '28MB',
+        quality: 'high',
+        category: 'asmr',
+        icon: '🌺',
+        description: 'Calm, soothing British voice - Relaxing and gentle',
+        modelPath: 'en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx',
+        recommended: true
+      },
+      {
+        id: 'en_US-lessac-medium',
+        name: 'Lessac',
+        language: 'en-US',
+        gender: 'female',
+        size: '30MB',
+        quality: 'high',
+        category: 'natural',
+        icon: '💜',
+        description: 'Natural, empathetic tone - Warm and conversational',
+        modelPath: 'en/en_US/lessac/medium/en_US-lessac-medium.onnx',
+        recommended: false
+      },
+      // === MALE VOICES (Therapeutic/ASMR) ===
+      {
+        id: 'en_US-joe-medium',
+        name: 'Joe',
         language: 'en-US',
         gender: 'male',
         size: '28MB',
         quality: 'high',
-        speed: '1.5x realtime',
-        description: 'Clear, professional tone',
-        modelUrl: 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx',
-        configUrl: 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json'
+        category: 'asmr',
+        icon: '🌿',
+        description: 'Deep, calming voice - Soothing baritone for relaxation',
+        modelPath: 'en/en_US/joe/medium/en_US-joe-medium.onnx',
+        recommended: true
+      },
+      {
+        id: 'en_GB-alan-medium',
+        name: 'Alan',
+        language: 'en-GB',
+        gender: 'male',
+        size: '28MB',
+        quality: 'high',
+        category: 'asmr',
+        icon: '🍃',
+        description: 'Gentle British male - Soft-spoken and reassuring',
+        modelPath: 'en/en_GB/alan/medium/en_GB-alan-medium.onnx',
+        recommended: true
+      },
+      {
+        id: 'en_US-ryan-high',
+        name: 'Ryan',
+        language: 'en-US',
+        gender: 'male',
+        size: '32MB',
+        quality: 'high',
+        category: 'natural',
+        icon: '💙',
+        description: 'Clear, professional tone - Natural conversation',
+        modelPath: 'en/en_US/ryan/high/en_US-ryan-high.onnx',
+        recommended: false
       }
     ];
     
-    this.selectedVoice = 'en_US-lessac-medium'; // Default to female voice
+    // Default to Amy (soft female ASMR voice) for therapeutic experience
+    this.selectedVoice = 'en_US-amy-medium';
+    this.onProgressCallback = null;
   }
 
   /**
@@ -72,16 +138,15 @@ class PiperService {
       }
 
       console.log(`📥 Loading Piper voice: ${voiceInfo.name} (${voiceInfo.size})`);
+      console.log(`[Piper] Using proper espeak-ng phonemizer via piper-wasm`);
 
-      // Use local model path
-      const modelPath = `/models/piper/${voiceId}.onnx`;
-
-      // Initialize worker with model path
-      await this.initializeWorker(modelPath, voiceId);
+      // Pre-initialize by doing a small test synthesis
+      // This pre-loads the WASM and model files
+      await this._warmupSynthesis(voiceInfo);
 
       this.currentVoice = voiceId;
       this.isInitialized = true;
-      console.log(`✅ Piper voice ${voiceId} loaded successfully`);
+      console.log(`✅ Piper voice ${voiceId} loaded successfully with espeak-ng phonemizer`);
 
     } catch (error) {
       console.error('❌ Failed to load Piper voice:', error);
@@ -93,172 +158,59 @@ class PiperService {
   }
 
   /**
-   * Check if voice model/config exists in browser cache
-   * @param {string} voiceId - Voice ID to check
-   * @param {string} type - 'model' or 'config'
-   * @returns {Promise<ArrayBuffer|Object|null>}
+   * Warmup synthesis to pre-load WASM and model
+   * @private
    */
-  async checkCache(voiceId, type) {
+  async _warmupSynthesis(voiceInfo) {
+    console.log('[Piper] Warming up synthesis engine...');
     try {
-      const cacheName = 'mindscribe-piper-voices';
-      const cache = await caches.open(cacheName);
-      const cacheKey = `piper-${type}-${voiceId}`;
-      const cached = await cache.match(cacheKey);
-      
-      if (cached) {
-        if (type === 'config') {
-          return await cached.json();
-        } else {
-          return await cached.arrayBuffer();
-        }
-      }
-      return null;
+      // Small test to pre-load everything
+      await this._synthesizeWithPiperWasm('test', voiceInfo, true);
+      console.log('[Piper] Warmup complete');
     } catch (error) {
-      console.warn('Cache check failed:', error);
-      return null;
+      console.warn('[Piper] Warmup failed, will try on first real synthesis:', error.message);
+      // Don't throw - let first real synthesis attempt handle it
     }
   }
 
   /**
-   * Download model or config from URL with progress tracking
-   * @param {string} url - Model/config URL
-   * @param {string} voiceId - Voice ID for caching
-   * @param {string} type - 'model' or 'config'
-   * @returns {Promise<ArrayBuffer|Object>}
+   * Internal synthesis using piper-wasm
+   * @private
    */
-  async downloadModel(url, voiceId, type) {
-    const response = await fetch(url);
+  async _synthesizeWithPiperWasm(text, voiceInfo, isWarmup = false) {
+    // Paths to piper-wasm assets
+    const piperPhonemizeJsUrl = `${this.piperBasePath}/piper_phonemize.js`;
+    const piperPhonemizeWasmUrl = `${this.piperBasePath}/piper_phonemize.wasm`;
+    const piperPhonemizeDataUrl = `${this.piperBasePath}/piper_phonemize.data`;
+    const workerUrl = `${this.piperBasePath}/piper_worker.js`;
     
-    if (!response.ok) {
-      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+    // Model URLs from HuggingFace
+    const modelUrl = `${HF_BASE}${voiceInfo.modelPath}`;
+    const modelConfigUrl = `${HF_BASE}${voiceInfo.modelPath}.json`;
+
+    if (!isWarmup) {
+      console.log(`[Piper] Synthesizing: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
     }
 
-    if (type === 'config') {
-      const configData = await response.json();
-      await this.cacheModel(voiceId, configData, type);
-      return configData;
-    } else {
-      const contentLength = response.headers.get('content-length');
-      const total = parseInt(contentLength, 10);
-      let loaded = 0;
-
-      const reader = response.body.getReader();
-      const chunks = [];
-
-      while (true) {
-        const { done, value } = await reader.read();
-        
-        if (done) break;
-        
-        chunks.push(value);
-        loaded += value.length;
-
-        const progress = (loaded / total) * 100;
-        console.log(`📊 Download progress (${type}): ${progress.toFixed(1)}%`);
-        
-        // Emit progress event
-        this.emitProgress({ loaded, total, progress, type });
-      }
-
-      // Combine chunks into single ArrayBuffer
-      const modelData = new Uint8Array(loaded);
-      let position = 0;
-      for (const chunk of chunks) {
-        modelData.set(chunk, position);
-        position += chunk.length;
-      }
-
-      // Cache the model
-      await this.cacheModel(voiceId, modelData.buffer, type);
-
-      return modelData.buffer;
-    }
-  }
-
-  /**
-   * Cache model/config in browser Cache API
-   * @param {string} voiceId - Voice ID
-   * @param {ArrayBuffer|Object} data - Model data or config object
-   * @param {string} type - 'model' or 'config'
-   */
-  async cacheModel(voiceId, data, type) {
-    try {
-      const cacheName = 'mindscribe-piper-voices';
-      const cache = await caches.open(cacheName);
-      const cacheKey = `piper-${type}-${voiceId}`;
-      
-      let response;
-      if (type === 'config') {
-        response = new Response(JSON.stringify(data), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      } else {
-        response = new Response(data, {
-          headers: {
-            'Content-Type': 'application/octet-stream',
-            'Content-Length': data.byteLength.toString()
-          }
-        });
-      }
-      
-      await cache.put(cacheKey, response);
-      const size = type === 'config' 
-        ? `${JSON.stringify(data).length} bytes`
-        : `${(data.byteLength / 1024 / 1024).toFixed(1)} MB`;
-      console.log(`💾 Cached Piper ${type}: ${voiceId} (${size})`);
-    } catch (error) {
-      console.warn(`Failed to cache ${type}:`, error);
-    }
-  }
-
-  /**
-   * Initialize Piper worker with model path
-   * @param {string} modelPath - Path to ONNX model
-   * @param {string} voiceId - Voice ID
-   */
-  async initializeWorker(modelPath, voiceId) {
-    // Terminate existing worker if any
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
-
-    // Create new worker
-    this.worker = new Worker(new URL('../workers/piper.worker.js', import.meta.url), {
-      type: 'module'
-    });
-
-    // Setup message handler
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Worker initialization timeout'));
-      }, 120000); // 120 second timeout
-
-      this.worker.onmessage = (event) => {
-        const { type, error } = event.data;
-
-        if (type === 'initialized') {
-          clearTimeout(timeout);
-          console.log('✅ Piper worker initialized');
-          resolve();
-        } else if (type === 'error') {
-          clearTimeout(timeout);
-          reject(new Error(error));
+    const result = await piperGenerate(
+      piperPhonemizeJsUrl,
+      piperPhonemizeWasmUrl,
+      piperPhonemizeDataUrl,
+      workerUrl,
+      modelUrl,
+      modelConfigUrl,
+      null, // speakerId (null for single-speaker models)
+      text,
+      (progress) => {
+        if (!isWarmup && this.onProgressCallback) {
+          this.onProgressCallback(progress);
         }
-      };
+      },
+      null, // phonemeIds (let piper-wasm generate them using espeak-ng)
+      false // inferEmotion
+    );
 
-      this.worker.onerror = (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      };
-
-      // Send model path to worker
-      this.worker.postMessage({
-        type: 'init',
-        modelPath,
-        voiceId
-      });
-    });
+    return result;
   }
 
   /**
@@ -290,51 +242,84 @@ class PiperService {
       text = text.substring(0, 500);
     }
 
-    console.log(`🗣️ Synthesizing speech: "${text.substring(0, 50)}..."`);
+    console.log(`🗣️ Synthesizing speech with espeak-ng phonemizer: "${text.substring(0, 50)}..."`);
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Speech synthesis timeout'));
-      }, 30000); // 30 second timeout
+    try {
+      const voiceInfo = this.availableVoices.find(v => v.id === this.currentVoice);
+      
+      if (!voiceInfo) {
+        throw new Error(`Voice not found: ${this.currentVoice}`);
+      }
 
-      const messageHandler = (event) => {
-        const { type, audioData, sampleRate, error } = event.data;
+      // Use piper-wasm for synthesis
+      const result = await this._synthesizeWithPiperWasm(text, voiceInfo);
 
-        if (type === 'synthesis') {
-          clearTimeout(timeout);
-          this.worker.removeEventListener('message', messageHandler);
-          const duration = (audioData.length / sampleRate).toFixed(1);
-          console.log(`✅ Synthesis complete: ${audioData.length} samples (${duration}s at ${sampleRate}Hz)`);
-          resolve({ audioData: new Float32Array(audioData), sampleRate });
-        } else if (type === 'error') {
-          clearTimeout(timeout);
-          this.worker.removeEventListener('message', messageHandler);
-          reject(new Error(error));
-        }
+      // Convert blob URL to audio data
+      const audioData = await this._blobUrlToAudioData(result.file);
+      
+      const adjustedDuration = result.duration / this.speechRate;
+      console.log(`✅ Synthesis complete: ${audioData.audioData.length} samples (${result.duration.toFixed(1)}s → ${adjustedDuration.toFixed(1)}s at ${this.speechRate}x speed)`);
+      console.log(`[Piper] Phonemes used: ${result.phonemes?.join(' ') || 'N/A'}`);
+
+      return {
+        audioData: audioData.audioData,
+        sampleRate: audioData.sampleRate,
+        speechRate: this.speechRate
       };
 
-      this.worker.addEventListener('message', messageHandler);
+    } catch (error) {
+      console.error('❌ Synthesis failed:', error);
+      throw error;
+    }
+  }
 
-      // Send text to worker
-      this.worker.postMessage({
-        type: 'synthesize',
-        text
-      });
-    });
+  /**
+   * Convert blob URL to Float32Array audio data
+   * @private
+   */
+  async _blobUrlToAudioData(blobUrl) {
+    try {
+      // Fetch the blob
+      const response = await fetch(blobUrl);
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+
+      // Decode using AudioContext
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      // Get mono channel data
+      const audioData = audioBuffer.getChannelData(0);
+      const sampleRate = audioBuffer.sampleRate;
+
+      // Cleanup
+      await audioContext.close();
+      URL.revokeObjectURL(blobUrl);
+
+      return {
+        audioData: new Float32Array(audioData),
+        sampleRate
+      };
+    } catch (error) {
+      console.error('[Piper] Failed to convert audio:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Set progress callback
+   * @param {Function} callback - Progress callback function
+   */
+  setProgressCallback(callback) {
+    this.onProgressCallback = callback;
   }
 
   /**
    * Unload Piper TTS and cleanup
    */
   async unloadModel() {
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
-
     this.isInitialized = false;
     this.currentVoice = null;
-    this.session = null;
     console.log('🗑️ Piper TTS unloaded');
   }
 
@@ -355,11 +340,33 @@ class PiperService {
   }
 
   /**
+   * Set speech rate (playback speed)
+   * @param {number} rate - Speed multiplier (0.5 = half speed, 1.0 = normal, 1.5 = 50% faster)
+   */
+  setSpeechRate(rate) {
+    if (rate < 0.5 || rate > 2.0) {
+      console.warn('[Piper] Speech rate should be between 0.5 and 2.0, got:', rate);
+      rate = Math.max(0.5, Math.min(2.0, rate));
+    }
+    this.speechRate = rate;
+    console.log(`[Piper] Speech rate set to ${rate}x`);
+  }
+
+  /**
+   * Get current speech rate
+   * @returns {number} - Current speech rate multiplier
+   */
+  getSpeechRate() {
+    return this.speechRate;
+  }
+
+  /**
    * Emit progress event (can be overridden)
    */
   emitProgress(progress) {
-    // Override this method to handle progress updates
-    // Example: this.onProgress && this.onProgress(progress);
+    if (this.onProgressCallback) {
+      this.onProgressCallback(progress);
+    }
   }
 }
 

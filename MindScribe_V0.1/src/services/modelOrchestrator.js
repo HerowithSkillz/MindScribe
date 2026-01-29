@@ -3,10 +3,12 @@
  * 
  * Follows the same pattern as WebLLM service for consistency
  * Ensures only required models are loaded to optimize memory usage
+ * 
+ * Updated: Now uses WebGPU-accelerated Whisper for 6-8x faster transcription
  */
 
 import webLLMService from './webllm.js';
-import whisperService from './whisper.js';
+import whisperWebGPU from './whisperWebGPU.js';
 import piperService from './piper.js';
 
 class ModelOrchestrator {
@@ -61,18 +63,32 @@ Instructions:
       // Small delay for state sync
       await this.sleep(100);
 
-      // Step 2: Load Whisper STT (~388MB for base.en)
+      // Step 2: Load Whisper WebGPU STT (39MB for tiny.en - WebGPU accelerated!)
       if (!this.activeModels.whisper) {
-        console.log('[ModelOrchestrator] Loading Whisper STT...');
-        await whisperService.loadModel('base.en');
-        this.activeModels.whisper = true;
-        console.log('✅ Whisper loaded');
+        console.log('[ModelOrchestrator] Loading Whisper WebGPU (tiny.en)...');
+        try {
+          const success = await whisperWebGPU.initialize('whisper-tiny.en', (progress) => {
+            console.log(`[ModelOrchestrator] ${progress.text} (${progress.progress}%)`);
+          });
+          
+          if (success) {
+            this.activeModels.whisper = true;
+            const info = whisperWebGPU.getModelInfo();
+            console.log(`✅ Whisper loaded with ${info.device.toUpperCase()} acceleration`);
+          } else {
+            throw new Error('Whisper initialization returned false');
+          }
+        } catch (whisperError) {
+          console.error('[ModelOrchestrator] Failed to initialize Whisper WebGPU:', whisperError);
+          throw new Error(`Voice therapy initialization failed: ${whisperError.message}. Please check your internet connection and try again.`);
+        }
       }
 
-      // Step 3: Load Piper TTS (~200MB for lessac-medium)
+      // Step 3: Load Piper TTS with default ASMR voice (Amy)
       if (!this.activeModels.piper) {
         console.log('[ModelOrchestrator] Loading Piper TTS...');
-        await piperService.loadModel('en_US-lessac-medium');
+        // Default to Amy - soft, gentle ASMR voice for therapy
+        await piperService.loadModel('en_US-amy-medium');
         this.activeModels.piper = true;
         console.log('✅ Piper TTS loaded');
       }
@@ -84,7 +100,7 @@ Instructions:
 
       this.activeTab = 'voice';
       console.log('✅ [ModelOrchestrator] Voice Therapy tab ready');
-      console.log(`📊 Memory footprint: Whisper (388MB) + Piper (200MB) + WebLLM (shared) ≈ ~600MB new`);
+      console.log(`📊 Memory footprint: Whisper WebGPU (39MB) + Piper (200MB) + WebLLM (shared) ≈ ~250MB new`);
 
     } catch (error) {
       console.error('❌ Failed to switch to voice tab:', error);
@@ -113,12 +129,12 @@ Instructions:
       this.isTransitioning = true;
       console.log('[ModelOrchestrator] Leaving Voice Therapy tab...');
 
-      // Step 1: Unload Whisper STT
+      // Step 1: Unload Whisper WebGPU STT
       if (this.activeModels.whisper) {
-        console.log('[ModelOrchestrator] Unloading Whisper...');
-        await whisperService.unloadModel();
+        console.log('[ModelOrchestrator] Unloading Whisper WebGPU...');
+        await whisperWebGPU.unload();
         this.activeModels.whisper = false;
-        console.log('✅ Whisper unloaded');
+        console.log('✅ Whisper WebGPU unloaded');
       }
 
       // Step 2: Unload Piper TTS

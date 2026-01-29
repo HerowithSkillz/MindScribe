@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import modelOrchestrator from '../services/modelOrchestrator';
-import whisperService from '../services/whisper';
 import piperService from '../services/piper';
 import audioRecorder from '../services/audioRecorder';
 import voicePipeline from '../services/voicePipeline';
@@ -37,6 +36,7 @@ export const VoiceProvider = ({ children }) => {
   const currentSessionIdRef = useRef(null);
   const isInitializingRef = useRef(false);
   const isCleaningUpRef = useRef(false);
+  const sessionActiveRef = useRef(false);
 
   /**
    * Initialize voice models - called when user navigates to Voice Therapy tab
@@ -124,6 +124,98 @@ export const VoiceProvider = ({ children }) => {
   }, [sessionActive]);
 
   /**
+   * Continuous listening mode - automatically detects speech and processes it
+   */
+  const startContinuousListening = useCallback(async () => {
+    console.log('[VoiceContext] Starting continuous listening...');
+
+    const processAudioLoop = async () => {
+      // Exit if session is no longer active
+      if (!sessionActiveRef.current) {
+        console.log('[VoiceContext] Session ended, stopping continuous listening');
+        return;
+      }
+
+      try {
+        // Start recording
+        console.log('[VoiceContext] Starting recording...');
+        setIsRecording(true);
+        setError(null);
+
+        await audioRecorder.startRecording();
+
+        console.log('✅ Recording started');
+
+        // Wait for 3 seconds of audio
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        // Stop recording
+        if (!sessionActiveRef.current) return; // Check again before stopping
+
+        console.log('[VoiceContext] Stopping recording...');
+        const audioData = await audioRecorder.stopRecording();
+        setIsRecording(false);
+
+        // Process the audio
+        if (audioData && audioData.length > 0) {
+          console.log('[VoiceContext] Processing audio...');
+          setIsProcessing(true);
+
+          try {
+            const result = await voicePipeline.processVoiceInput(audioData);
+
+            // Add to conversation history
+            const newConversation = {
+              user: result.userText,
+              ai: result.aiResponse,
+              timestamp: new Date().toISOString(),
+              processingTime: result.processingTime
+            };
+
+            setConversationHistory(prev => [...prev, newConversation]);
+
+            // Play AI response and wait for it to finish
+            setIsSpeaking(true);
+            // voicePipeline.processVoiceInput already plays the audio and returns after completion
+            setIsSpeaking(false);
+
+            console.log('✅ Audio processed successfully');
+
+          } catch (error) {
+            console.error('❌ Voice pipeline error:', error);
+            
+            // Don't show "No speech detected" as error - just continue listening
+            if (!error.message?.includes('No speech detected')) {
+              setError(error.message || 'Failed to process voice input');
+            }
+          } finally {
+            setIsProcessing(false);
+          }
+        }
+
+        // Continue the loop if session is still active
+        if (sessionActiveRef.current) {
+          // Small delay before next cycle
+          setTimeout(processAudioLoop, 500);
+        }
+
+      } catch (error) {
+        console.error('❌ Failed in continuous listening:', error);
+        setIsRecording(false);
+        setIsProcessing(false);
+        
+        // Continue the loop even if there was an error
+        if (sessionActiveRef.current) {
+          setTimeout(processAudioLoop, 1000);
+        }
+      }
+    };
+
+    // Start the loop
+    processAudioLoop();
+  }, []);
+
+  /**
    * Start voice therapy session
    */
   const startSession = useCallback(async () => {
@@ -147,11 +239,15 @@ export const VoiceProvider = ({ children }) => {
       await voicePipeline.startSession();
 
       setSessionActive(true);
+      sessionActiveRef.current = true;
       sessionStartTimeRef.current = Date.now();
       setConversationHistory([]);
       setError(null);
 
       console.log('✅ Voice therapy session started');
+
+      // NOTE: No longer auto-start continuous listening
+      // User will manually toggle mic with toggleMic()
 
     } catch (err) {
       console.error('❌ Failed to start session:', err);
@@ -168,11 +264,16 @@ export const VoiceProvider = ({ children }) => {
       return;
     }
 
-    // Prevent double cleanup
+    console.log('[VoiceContext] Ending voice therapy session...');
+
+    // Stop the continuous listening loop by setting sessionActive to false
     setSessionActive(false);
+    sessionActiveRef.current = false;
+    setIsRecording(false);
+    setIsProcessing(false);
+    setIsSpeaking(false);
 
     try {
-      console.log('[VoiceContext] Ending voice therapy session...');
 
       // Stop recording if active (don't await to avoid delays)
       if (isRecording) {
@@ -352,6 +453,111 @@ export const VoiceProvider = ({ children }) => {
   }, []);
 
   /**
+   * Toggle microphone - Press to record, release to process
+   * This replaces the continuous auto-listening mode
+   */
+  const toggleMic = useCallback(async () => {
+    if (!sessionActive) {
+      console.warn('No active session');
+      return;
+    }
+
+    // If currently recording, stop and process
+    if (isRecording) {
+      try {
+        console.log('[VoiceContext] Stopping recording and processing...');
+        
+        setIsRecording(false);
+
+        // Clear recording interval
+        if (recordingIntervalRef.current) {
+          clearInterval(recordingIntervalRef.current);
+          recordingIntervalRef.current = null;
+        }
+
+        // Get recorded audio
+        const audioData = await audioRecorder.stopRecording();
+        
+        if (!audioData || audioData.length === 0) {
+          console.warn('No audio recorded');
+          return;
+        }
+
+        // Check minimum duration (at least 0.5 seconds)
+        const audioDuration = audioData.length / 16000;
+        if (audioDuration < 0.5) {
+          console.warn('Recording too short, ignoring');
+          return;
+        }
+
+        // Process audio through voice pipeline
+        setIsProcessing(true);
+        console.log('[VoiceContext] Processing audio...');
+
+        const result = await voicePipeline.processVoiceInput(audioData);
+
+        // Update conversation history
+        setConversationHistory(prev => [
+          ...prev,
+          { role: 'user', content: result.transcript, timestamp: Date.now() },
+          { role: 'assistant', content: result.aiResponse, timestamp: Date.now() }
+        ]);
+
+        // Update processing metrics
+        setProcessingMetrics(result.processingTime);
+
+        // Set speaking state while audio plays
+        setIsSpeaking(true);
+        
+        // Wait for audio to finish playing (estimate based on audio length)
+        if (result.audioOutput && result.audioOutput.length > 0) {
+          const playbackDuration = (result.audioOutput.length / 22050) * 1000;
+          setTimeout(() => {
+            setIsSpeaking(false);
+          }, playbackDuration);
+        } else {
+          setIsSpeaking(false);
+        }
+
+        setIsProcessing(false);
+        console.log('✅ Audio processed successfully');
+
+      } catch (err) {
+        console.error('❌ Failed to process recording:', err);
+        // Don't show "No speech detected" as a user-facing error
+        if (!err.message?.includes('No speech detected')) {
+          setError(err.message || 'Failed to process audio');
+        }
+        setIsProcessing(false);
+        setIsSpeaking(false);
+      }
+    } else {
+      // Start recording
+      try {
+        console.log('[VoiceContext] Starting recording...');
+        
+        await audioRecorder.startRecording();
+        setIsRecording(true);
+        setRecordingDuration(0);
+        setError(null); // Clear any previous error
+
+        // Update recording duration every 100ms
+        recordingIntervalRef.current = setInterval(() => {
+          const duration = audioRecorder.getRecordingDuration();
+          setRecordingDuration(duration);
+        }, 100);
+
+        console.log('✅ Recording started');
+
+      } catch (err) {
+        console.error('❌ Failed to start recording:', err);
+        setError(err.message || 'Failed to start recording');
+        setIsRecording(false);
+      }
+    }
+  }, [sessionActive, isRecording]);
+
+  /**
    * Clear conversation history
    */
   const clearHistory = useCallback(() => {
@@ -484,6 +690,7 @@ export const VoiceProvider = ({ children }) => {
     endSession,
     startRecording,
     stopRecording,
+    toggleMic,  // New: Manual mic toggle (press to record, press again to process)
     cancelAudio,
     clearHistory,
     getSessionDuration,

@@ -166,6 +166,21 @@ class AudioRecorder {
    * @returns {Promise<AudioBuffer>}
    */
   async blobToAudioBuffer(blob) {
+    // Check if audioContext was cleaned up during recording
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      console.warn('[AudioRecorder] AudioContext was closed, creating temporary context for decoding');
+      const tempContext = new (window.AudioContext || window.webkitAudioContext)();
+      try {
+        const arrayBuffer = await blob.arrayBuffer();
+        const result = await tempContext.decodeAudioData(arrayBuffer);
+        await tempContext.close();
+        return result;
+      } catch (error) {
+        await tempContext.close();
+        throw error;
+      }
+    }
+    
     const arrayBuffer = await blob.arrayBuffer();
     return await this.audioContext.decodeAudioData(arrayBuffer);
   }
