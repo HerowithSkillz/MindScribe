@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0"
+    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
+    "postinstall": "node scripts/fix-piper-wasm.js"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",

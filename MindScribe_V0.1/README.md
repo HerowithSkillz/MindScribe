@@ -64,6 +64,8 @@ cd "MindScribe V0.1"
 npm install
 ```
 
+> **Note**: The postinstall script automatically fixes a known issue with the `piper-wasm` package (missing `expressions.js` file). If you see any errors related to this, run `node scripts/fix-piper-wasm.js` manually.
+
 3. Start the development server:
 ```bash
 npm run dev
