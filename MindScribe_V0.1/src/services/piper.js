@@ -254,11 +254,11 @@ class PiperService {
       // Use piper-wasm for synthesis
       const result = await this._synthesizeWithPiperWasm(text, voiceInfo);
 
-      // Convert blob URL to audio data
+      // Convert blob URL to audio data (preserves actual sample rate from model)
       const audioData = await this._blobUrlToAudioData(result.file);
       
-      const adjustedDuration = result.duration / this.speechRate;
-      console.log(`✅ Synthesis complete: ${audioData.audioData.length} samples (${result.duration.toFixed(1)}s → ${adjustedDuration.toFixed(1)}s at ${this.speechRate}x speed)`);
+      const duration = audioData.audioData.length / audioData.sampleRate;
+      console.log(`✅ Synthesis complete: ${audioData.audioData.length} samples at ${audioData.sampleRate}Hz (${duration.toFixed(2)}s)`);
       console.log(`[Piper] Phonemes used: ${result.phonemes?.join(' ') || 'N/A'}`);
 
       return {
@@ -288,9 +288,15 @@ class PiperService {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
       
-      // Get mono channel data
+      // Get mono channel data and sample rate
+      // IMPORTANT: Each Piper model may have different sample rates!
+      // - 16000 Hz: Telephony/low quality models
+      // - 22050 Hz: Standard Piper models
+      // - 24000 Hz: High quality models
       const audioData = audioBuffer.getChannelData(0);
       const sampleRate = audioBuffer.sampleRate;
+      
+      console.log(`[Piper] Audio decoded: ${audioData.length} samples at ${sampleRate}Hz (${(audioData.length / sampleRate).toFixed(2)}s)`);
 
       // Cleanup
       await audioContext.close();

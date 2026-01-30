@@ -184,7 +184,8 @@ class VoicePipeline {
             
             // Queue audio for immediate streaming playback
             // This plays audio AS SOON AS it's synthesized, not after everything is done
-            this.queueStreamingAudio(audioOutput.audioData);
+            // Pass the actual sample rate from Piper TTS to ensure correct pitch
+            this.queueStreamingAudio(audioOutput.audioData, audioOutput.sampleRate);
             
           } catch (ttsError) {
             console.error('TTS error for sentence:', ttsError);
@@ -254,10 +255,11 @@ class VoicePipeline {
 
   /**
    * Play audio through speakers using Web Audio API
-   * @param {Float32Array} audioData - Audio samples (22.05kHz, mono)
+   * @param {Float32Array} audioData - Audio samples
+   * @param {number} sampleRate - Sample rate from Piper TTS (default 22050)
    * @returns {Promise<void>}
    */
-  async playAudio(audioData) {
+  async playAudio(audioData, sampleRate = 22050) {
     if (!this.audioContext) {
       throw new Error('Audio context not initialized');
     }
@@ -278,12 +280,13 @@ class VoicePipeline {
           this.audioContext.resume();
         }
 
-        // Create audio buffer at Piper's native sample rate
-        // NO playbackRate modification - preserves natural voice pitch
+        // Create audio buffer using the ACTUAL sample rate from Piper TTS
+        // This is critical - using wrong sample rate causes pitch distortion!
+        // Each Piper model may have different sample rates (16000, 22050, 24000, etc.)
         const audioBuffer = this.audioContext.createBuffer(
           1, // mono
           audioData.length,
-          22050 // Piper native sample rate
+          sampleRate // Use actual sample rate from model for correct pitch
         );
 
         // Copy audio data to buffer
@@ -306,8 +309,8 @@ class VoicePipeline {
         source.start(0);
         this.currentAudioSource = source;
         
-        const duration = audioData.length / 22050;
-        console.log(`🔊 Playing ${duration.toFixed(1)}s of natural audio`);
+        const duration = audioData.length / sampleRate;
+        console.log(`🔊 Playing ${duration.toFixed(1)}s of natural audio at ${sampleRate}Hz`);
 
       } catch (error) {
         console.error('❌ Failed to play audio:', error);
@@ -335,8 +338,9 @@ class VoicePipeline {
    * Queue audio chunk for immediate streaming playback
    * Uses Web Audio API scheduling for seamless playback
    * @param {Float32Array} audioData - Audio samples to queue
+   * @param {number} sampleRate - Sample rate from Piper TTS (default 22050)
    */
-  queueStreamingAudio(audioData) {
+  queueStreamingAudio(audioData, sampleRate = 22050) {
     if (!this.audioContext) {
       console.error('[VoicePipeline] Audio context not initialized');
       return;
@@ -348,12 +352,13 @@ class VoicePipeline {
         this.audioContext.resume();
       }
 
-      // Create audio buffer at Piper's native sample rate
-      // NO playbackRate modification - preserves natural voice pitch and quality
+      // Create audio buffer using the ACTUAL sample rate from Piper TTS
+      // This is critical for correct pitch - each model may use different rates!
+      // Common rates: 16000 (telephony), 22050 (standard), 24000 (high quality)
       const audioBuffer = this.audioContext.createBuffer(
         1, // mono
         audioData.length,
-        22050 // Piper native sample rate - play as-is for natural voice
+        sampleRate // Use actual sample rate from model for correct pitch
       );
       audioBuffer.getChannelData(0).set(audioData);
 
@@ -365,7 +370,7 @@ class VoicePipeline {
 
       // Calculate when to start this chunk
       const currentTime = this.audioContext.currentTime;
-      const audioDuration = audioData.length / 22050; // Natural duration
+      const audioDuration = audioData.length / sampleRate; // Duration based on actual sample rate
       
       // If this is the first chunk or we've fallen behind, start immediately
       if (!this.isPlaying || this.nextPlayTime < currentTime) {
